@@ -1,0 +1,6 @@
+{
+  "name": "AI-Помощник Финансового Отчета",
+  "description": "Автоматизированное формирование финансовых отчетов и зарплатных ведомостей с умным анализом и разделением периодов выплат по дате отсечения.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
