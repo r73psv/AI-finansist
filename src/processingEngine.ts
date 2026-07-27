@@ -694,6 +694,17 @@ function findMatchingRowIndexInternal(
     if (idx !== -1) return idx;
   }
 
+  // 5. "2026 Постоянные // Оплата электричества" -> "Коммунальные платежи"
+  if (
+    normCat === normalizeString("2026 Постоянные // Оплата электричества") ||
+    normCat.includes("постоянные // оплата электричества") ||
+    normCat.includes("оплата электричества") ||
+    normCat.includes("электричеств")
+  ) {
+    const idx = report.findIndex(r => r.label === "Коммунальные платежи" || r.label === "Коммунальные услуги");
+    if (idx !== -1) return idx;
+  }
+
   // NEW RULES FOR SPECIFIC MATCHING:
   // 0. "заработная плата", "аванс" and their abbreviations/typos in Comment -> "Зарплата выплаченная"
   const adminSalaryIndex = report.findIndex(r => r.label === "Зарплата выплаченная");
@@ -897,6 +908,9 @@ function findMatchingRowIndexInternal(
       if (!text) return false;
       const t = text.toLowerCase();
       return (
+        t.includes("электричеств") ||
+        t.includes("электрич") ||
+        t.includes("электр") ||
         t.includes("электроэнерг") ||
         t.includes("электроэн") ||
         t.includes("эл.энерг") ||
@@ -910,6 +924,7 @@ function findMatchingRowIndexInternal(
         t.includes("водоснабж") ||
         t.includes("водоканал") ||
         t.includes("горкомхоз") ||
+        t.includes("оплата электричества") ||
         /\bжкх\b/i.test(t) ||
         /\bжку\b/i.test(t) ||
         /\bэл\.?\s*эн\.?\b/i.test(t) ||
