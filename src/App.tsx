@@ -298,7 +298,7 @@ export default function App() {
       id: `demo_rec_${idx}_${Date.now()}`,
       date: parseDate(dem.dateStr),
     }));
-    handleDataParsed(structured, 'Реалистичный_Демо_Отчет_Студии_Красоты.xlsx');
+    handleDataParsed(structured, 'Финансовые_операции_(25.01.2026_-_31.01.2026).xlsx');
   };
 
   // Processing results: Financial Report
