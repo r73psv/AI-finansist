@@ -571,13 +571,34 @@ function findMatchingRowIndexInternal(
   fileName?: string | null
 ): number {
   // Special file override rule:
-  // "Если имя загружаемого файла начинается с "Финансовые_операции_(25", тогда записи у которых в графе "Назначение" стоят слова "Налоги и сборы" учитывать в показателе "Налоги" раздела "Расходы за счёт фондов"
+  // "Для файлов имя которых начинается с "Финансовые_операции_(25" категория 2026 Постоянные // Оплата электричества разносится в статью «Коммунальные платежи»."
+  // "записи у которых в графе "Назначение" стоят слова "Налоги и сборы" учитывать в показателе "Налоги" раздела "Расходы за счёт фондов""
   if (fileName) {
     const fn = fileName.toLowerCase().trim();
     // Normalize spaces/underscores for checking prefix
-    const matchesFilePrefix = fn.startsWith("финансовые_операции_(25") || fn.startsWith("финансовые операции (25");
+    const matchesFilePrefix = 
+      fn.startsWith("финансовые_операции_(25") || 
+      fn.startsWith("финансовые операции (25") ||
+      fn.startsWith("финансовые_операции_25") ||
+      fn.startsWith("финансовые операции 25") ||
+      (fn.startsWith("финансовые_операции") && fn.includes("25")) ||
+      (fn.startsWith("финансовые операции") && fn.includes("25"));
+
     if (matchesFilePrefix) {
       const normCat = normalizeString(srcCategory);
+
+      // Rule for "2026 Постоянные // Оплата электричества" -> "Коммунальные платежи"
+      if (
+        normCat === normalizeString("2026 Постоянные // Оплата электричества") ||
+        normCat.includes("постоянные // оплата электричества") ||
+        normCat.includes("оплата электричества") ||
+        (normCat.includes("постоянные") && normCat.includes("электричеств"))
+      ) {
+        const commIndex = report.findIndex(r => r.label === "Коммунальные платежи" || r.label === "Коммунальные услуги");
+        if (commIndex !== -1) return commIndex;
+      }
+
+      // Rule for "Налоги и сборы" -> "Налоги"
       if (normCat === "налоги и сборы" || normCat.includes("налоги и сборы")) {
         const taxesIndex = report.findIndex(r => r.label === "Налоги" && r.index === 111 + N);
         if (taxesIndex !== -1) return taxesIndex;
