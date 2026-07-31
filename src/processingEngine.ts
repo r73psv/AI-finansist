@@ -562,6 +562,149 @@ export function findPredefinedSupplierIndex(counterparty: string, templateLabels
 }
 
 // Smart logic for categories matching (internal implementation)
+export interface SectionBounds {
+  minIndex: number;
+  maxIndex: number;
+  defaultIndex: number;
+  sectionName: string;
+}
+
+export function getSectionBounds(srcCategory: string, N: number): SectionBounds | null {
+  if (!srcCategory) return null;
+  const norm = normalizeString(srcCategory);
+
+  // 1. Pre-start / Additional expenses
+  if (
+    norm.includes("предстартов") ||
+    norm.includes("дополнительные расход") ||
+    norm.includes("доп. расход") ||
+    norm.includes("доп расход")
+  ) {
+    return {
+      minIndex: 94 + N,
+      maxIndex: 102 + N,
+      defaultIndex: 95 + N,
+      sectionName: "prestart"
+    };
+  }
+
+  // 2. Funds expenses
+  if (
+    norm.includes("расходы за счет фондов") ||
+    norm.includes("за счет фондов") ||
+    (norm.includes("фонд") && (norm.includes("списан") || norm.includes("расход") || norm.includes("оплат")))
+  ) {
+    return {
+      minIndex: 104 + N,
+      maxIndex: 111 + N,
+      defaultIndex: 104 + N,
+      sectionName: "funds_expenses"
+    };
+  }
+
+  // 3. Life support
+  if (
+    norm.includes("жизнеобеспечение")
+  ) {
+    return {
+      minIndex: 11,
+      maxIndex: 22,
+      defaultIndex: 11,
+      sectionName: "life_support"
+    };
+  }
+
+  // 4. Guest service
+  if (
+    norm.includes("сервис для гостей")
+  ) {
+    return {
+      minIndex: 23,
+      maxIndex: 35,
+      defaultIndex: 34,
+      sectionName: "guest_service"
+    };
+  }
+
+  // 5. Fixed expenses (Постоянные)
+  if (
+    norm.includes("постоянные")
+  ) {
+    return {
+      minIndex: 36,
+      maxIndex: 52,
+      defaultIndex: 36,
+      sectionName: "fixed_expenses"
+    };
+  }
+
+  // 6. Payroll / Salary
+  if (
+    norm.includes("заработная плата") ||
+    norm.includes("зарплата")
+  ) {
+    return {
+      minIndex: 87 + N,
+      maxIndex: 90 + N,
+      defaultIndex: 90 + N,
+      sectionName: "payroll"
+    };
+  }
+
+  // 7. Suppliers
+  if (
+    norm.includes("поставщик") ||
+    norm.includes("закупка")
+  ) {
+    return {
+      minIndex: 53,
+      maxIndex: 86 + N,
+      defaultIndex: 85,
+      sectionName: "suppliers"
+    };
+  }
+
+  // 8. Revenue
+  if (
+    norm.includes("выручка") ||
+    norm.includes("доход")
+  ) {
+    return {
+      minIndex: 0,
+      maxIndex: 7,
+      defaultIndex: 1,
+      sectionName: "revenue"
+    };
+  }
+
+  // 9. Other expenses
+  if (
+    norm === "прочие расходы" ||
+    norm === "прочие"
+  ) {
+    return {
+      minIndex: 91 + N,
+      maxIndex: 91 + N,
+      defaultIndex: 91 + N,
+      sectionName: "other"
+    };
+  }
+
+  // 10. General Variables
+  if (
+    norm.includes("переменные")
+  ) {
+    return {
+      minIndex: 8,
+      maxIndex: 35,
+      defaultIndex: 10,
+      sectionName: "variables"
+    };
+  }
+
+  return null;
+}
+
 function findMatchingRowIndexInternal(
   srcCategory: string,
   srcCounterparty: string,
@@ -572,8 +715,7 @@ function findMatchingRowIndexInternal(
 ): number {
   const normCat = normalizeString(srcCategory);
 
-  // 1. FILE-SPECIFIC AND OVERRIDE RULES
-  // "Для файлов имя которых начинается с "Финансовые_операции_(25" категория 2026 Постоянные // Оплата электричества разносится в статью «Коммунальные платежи»."
+  // 1. FILE-SPECIFIC OVERRIDE RULES
   if (fileName) {
     const fn = fileName.toLowerCase().trim();
     const isFinOps25 = 
@@ -586,7 +728,6 @@ function findMatchingRowIndexInternal(
       (fn.includes("финансовые") && fn.includes("25"));
 
     if (isFinOps25) {
-      // Rule for "2026 Постоянные // Оплата электричества" -> "Коммунальные платежи"
       if (
         normCat === normalizeString("2026 Постоянные // Оплата электричества") ||
         normCat.includes("постоянные // оплата электричества") ||
@@ -597,7 +738,6 @@ function findMatchingRowIndexInternal(
         if (commIndex !== -1) return commIndex;
       }
 
-      // Rule for "Налоги и сборы" -> "Налоги" (in Funds)
       if (normCat === "налоги и сборы" || normCat.includes("налоги и сборы")) {
         const taxesIndex = report.findIndex(r => r.label === "Налоги" && r.index === 111 + N);
         if (taxesIndex !== -1) return taxesIndex;
@@ -608,7 +748,7 @@ function findMatchingRowIndexInternal(
     }
   }
 
-  // General rule for "2026 Постоянные // Оплата электричества" -> "Коммунальные платежи"
+  // General override for "2026 Постоянные // Оплата электричества" -> "Коммунальные платежи"
   if (
     normCat === normalizeString("2026 Постоянные // Оплата электричества") ||
     normCat.includes("постоянные // оплата электричества") ||
@@ -618,61 +758,23 @@ function findMatchingRowIndexInternal(
     if (commIndex !== -1) return commIndex;
   }
 
-  // 2. EXPLICIT CATEGORY MATCHES
   // Investors
   if (normCat === "инвесторы" || normCat.includes("инвесторы")) {
     const idx = report.findIndex(r => r.label === "ИНВЕСТОРЫ");
     if (idx !== -1) return idx;
   }
 
-  // Funds
-  if (/фонды/i.test(srcCategory)) {
-    const parts = srcCategory.split(/фонды/i);
-    const afterFunds = parts.slice(1).join('фонды').trim().replace(/^[^a-zа-я0-9]+/i, '').trim();
-    if (afterFunds) {
-      let bestIdx = -1;
-      let maxScore = 0;
-      const startIndex = 105 + N;
-      const endIndex = 111 + N;
-      for (let idx = startIndex; idx <= endIndex; idx++) {
-        if (report[idx]) {
-          const score = getReverseMatchingScore(afterFunds, report[idx].label);
-          if (score > maxScore) {
-            maxScore = score;
-            bestIdx = idx;
-          }
-        }
-      }
-      if (bestIdx === -1 || maxScore === 0) {
-        const afterWords = normalizeString(afterFunds).split(/[^a-zа-я0-9]+/i).filter(w => w.length >= 3);
-        if (afterWords.length > 0) {
-          for (let idx = startIndex; idx <= endIndex; idx++) {
-            if (report[idx]) {
-              const labelNorm = normalizeString(report[idx].label);
-              const matches = afterWords.filter(w => labelNorm.includes(w));
-              if (matches.length > maxScore) {
-                maxScore = matches.length;
-                bestIdx = idx;
-              }
-            }
-          }
-        }
-      }
-      if (bestIdx !== -1 && maxScore > 0) {
-        return bestIdx;
-      }
-    }
-  }
+  // Get Section Bounds based on srcCategory
+  const bounds = getSectionBounds(srcCategory, N);
 
-  // 3. HIERARCHICAL MATCHING BY LEFT-TO-RIGHT `//` PARTS
-  // Priority rule:
-  // "сначала сопоставляются самые левая (до //) значения, далее следующие значения"
-  const catParts = srcCategory
-    .split(/\/\//)
-    .map(p => p.trim())
-    .filter(Boolean);
+  // If bounds are found, ALL matching (category parts AND comments) MUST stay strictly within bounds!
+  if (bounds) {
+    // A. Parse category parts
+    const catParts = srcCategory
+      .split(/\/\//)
+      .map(p => p.trim())
+      .filter(Boolean);
 
-  if (catParts.length > 0) {
     const parentGroups = [
       "2026 постоянные", "постоянные", "расходы постоянные",
       "2026 переменные", "переменные", "расходы переменные",
@@ -687,156 +789,219 @@ function findMatchingRowIndexInternal(
       "2026 дополнительные расходы", "дополнительные расходы", "доп расходы", "доп. расходы"
     ];
 
+    // Check sub-parts within bounds
     for (let partIdx = 0; partIdx < catParts.length; partIdx++) {
       const partStr = catParts[partIdx];
       const normPart = normalizeString(partStr);
 
-      // If this part is a broad parent group and there are subsequent parts available, skip to evaluating the next part
       if (partIdx < catParts.length - 1 && parentGroups.some(pg => normPart === pg || normPart.includes(pg))) {
         continue;
       }
 
-      // Explicit sub-part checks:
-      if (
-        normPart.includes("разнорабоч") ||
-        normPart.includes("зп разнорабоч")
-      ) {
-        const idx = report.findIndex(r => r.label === "ЗП Разнорабочие");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        normPart.includes("стройматериал") ||
-        normPart.includes("строй материалы") ||
-        normPart.includes("строй-материалы") ||
-        normPart.includes("ремонт") ||
-        (normPart.includes("оборудование") && normPart.includes("ремонт"))
-      ) {
-        const idx = report.findIndex(r => r.label === "Оборудование и стройматериалы для ремонта");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        normPart.includes("электроника") ||
-        (normPart.includes("обустройство") && normPart.includes("салон")) ||
-        (normPart.includes("зон") && normPart.includes("салон")) ||
-        normPart === "оборудование, электроника и обустройство зон салона"
-      ) {
-        const idx = report.findIndex(r => r.label === "Оборудование, электроника и обустройство зон салона");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        (normPart.includes("обустройство") && normPart.includes("мастер")) ||
-        (normPart.includes("зон") && normPart.includes("мастер")) ||
-        (normPart.includes("оборудование") && normPart.includes("мастер")) ||
-        normPart === "оборудование и обустройство зон мастеров"
-      ) {
-        const idx = report.findIndex(r => r.label === "Оборудование и обустройство зон мастеров");
-        if (idx !== -1) return idx;
-      }
-
-      if (normPart.includes("кредит")) {
-        const idx = report.findIndex(r => r.label === "Кредиты");
-        if (idx !== -1) return idx;
-      }
-
-      if (normPart.includes("долг") && normPart.includes("инвест")) {
-        const idx = report.findIndex(r => r.label === "Погашение долгов инвесторам");
-        if (idx !== -1) return idx;
-      }
-
-      if (normPart.includes("долг") && normPart.includes("аренд")) {
-        const idx = report.findIndex(r => r.label === "Погашение долгов аренда");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        normPart === "предстартовые" ||
-        normPart === "2026 предстартовые" ||
-        normPart === "предстартовые расходы" ||
-        normPart === "2026 предстартовые расходы"
-      ) {
-        const idx = report.findIndex(r => r.label === "Предстартовые");
-        if (idx !== -1) return idx;
-      }
-
-      // Explicit sub-part checks:
-      if (
-        normPart.includes("оплата электричества") ||
-        normPart === "электричество" ||
-        normPart === "оплата за электричество"
-      ) {
-        const commIdx = report.findIndex(r => r.label === "Коммунальные платежи" || r.label === "Коммунальные услуги");
-        if (commIdx !== -1) return commIdx;
-      }
-
-      if (
-        normPart === "2026 заработная плата персоналу" ||
-        normPart.includes("заработная плата персоналу") ||
-        normPart.includes("уборщицы") ||
-        normPart.includes("smm-менеджеры") ||
-        normPart.includes("помощники администратора")
-      ) {
-        const idx = report.findIndex(r => r.label === "Зарплата выплаченная");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        normPart.includes("для мастеров (косметические средства") ||
-        normPart === "для мастеров"
-      ) {
-        const idx = report.findIndex(r => r.label === "Для мастеров");
-        if (idx !== -1) return idx;
-      }
-
-      if (
-        normPart.includes("сервис для гостей (вода)") ||
-        normPart.includes("вода волжанка") ||
-        normPart === "вода"
-      ) {
-        const idx = report.findIndex(r => r.label === "Вода волжанка");
-        if (idx !== -1) return idx;
-      }
-
-      if (normPart === "прочие расходы" || normPart === "прочие") {
-        const idx = report.findIndex(r => r.label === "Прочие");
-        if (idx !== -1) return idx;
-      }
-
-      if (normPart.includes("аптечка")) {
-        const idx = report.findIndex(r => r.label === "Аптечка, лекарства");
-        if (idx !== -1) return idx;
-      }
-
-      // Supplier / Procurement check
-      const isProcurementPart = 
-        normPart.includes("закупка материалов") || 
-        normPart.includes("закупка товаров") ||
-        normPart.includes("закупка") ||
-        normPart.includes("материалы") ||
-        normPart.includes("товары");
-
-      if (isProcurementPart && srcCounterparty) {
-        const normCounterparty = normalizeString(srcCounterparty);
-        if (normCounterparty) {
-          let bestSupplierIdx = -1;
-          let maxScore = 0;
-          const supplierEndIndex = 86 + N;
-          for (let idx = 54; idx <= supplierEndIndex; idx++) {
-            const label = report[idx]?.label;
-            if (!label) continue;
-            const score = getCounterpartyMatchScore(label, srcCounterparty, srcCategory, srcComment);
-            if (score > maxScore && score >= 50) {
-              maxScore = score;
-              bestSupplierIdx = idx;
-            }
-          }
-          if (bestSupplierIdx !== -1) return bestSupplierIdx;
+      // Check sub-part logic specific to section
+      if (bounds.sectionName === "prestart") {
+        if (normPart.includes("разнорабоч") || normPart.includes("зп разнорабоч")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "ЗП Разнорабочие");
+          if (idx !== -1) return idx;
+        }
+        if (
+          normPart.includes("стройматериал") || normPart.includes("строй материалы") || normPart.includes("строй-материалы") ||
+          normPart.includes("ремонт") || (normPart.includes("оборудование") && normPart.includes("ремонт"))
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование и стройматериалы для ремонта");
+          if (idx !== -1) return idx;
+        }
+        if (
+          normPart.includes("электроника") || (normPart.includes("обустройство") && normPart.includes("салон")) ||
+          (normPart.includes("зон") && normPart.includes("салон"))
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование, электроника и обустройство зон салона");
+          if (idx !== -1) return idx;
+        }
+        if (
+          (normPart.includes("обустройство") && normPart.includes("мастер")) ||
+          (normPart.includes("зон") && normPart.includes("мастер")) ||
+          (normPart.includes("оборудование") && normPart.includes("мастер"))
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование и обустройство зон мастеров");
+          if (idx !== -1) return idx;
+        }
+        if (normPart.includes("кредит")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Кредиты");
+          if (idx !== -1) return idx;
+        }
+        if (normPart.includes("долг") && normPart.includes("инвест")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Погашение долгов инвесторам");
+          if (idx !== -1) return idx;
+        }
+        if (normPart.includes("долг") && normPart.includes("аренд")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Погашение долгов аренда");
+          if (idx !== -1) return idx;
         }
       }
 
-      // Try matching this part string against report labels
+      if (bounds.sectionName === "suppliers" && srcCounterparty) {
+        let bestSupplierIdx = -1;
+        let maxScore = 0;
+        for (let idx = bounds.minIndex; idx <= bounds.maxIndex; idx++) {
+          const label = report[idx]?.label;
+          if (!label) continue;
+          const score = getCounterpartyMatchScore(label, srcCounterparty, srcCategory, srcComment);
+          if (score > maxScore && score >= 50) {
+            maxScore = score;
+            bestSupplierIdx = idx;
+          }
+        }
+        if (bestSupplierIdx !== -1) return bestSupplierIdx;
+      }
+
+      // Reverse matching score within bounds
+      let bestPartMatchIdx = -1;
+      let maxPartScore = 0;
+      for (let idx = bounds.minIndex; idx <= bounds.maxIndex; idx++) {
+        const r = report[idx];
+        if (!r || r.type === 'header' || r.type === 'formula' || r.type === 'section') continue;
+
+        const score = getReverseMatchingScore(partStr, r.label);
+        if (score > maxPartScore) {
+          maxPartScore = score;
+          bestPartMatchIdx = idx;
+        }
+      }
+      if (bestPartMatchIdx !== -1 && maxPartScore >= 4) {
+        return bestPartMatchIdx;
+      }
+    }
+
+    // B. Comment analysis WITHIN BOUNDS ONLY
+    if (srcComment) {
+      const commLower = srcComment.toLowerCase();
+
+      if (bounds.sectionName === "prestart") {
+        if (commLower.includes("разнорабоч") || commLower.includes("маляр") || commLower.includes("рабочим") || commLower.includes("бригад")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "ЗП Разнорабочие");
+          if (idx !== -1) return idx;
+        }
+        if (
+          commLower.includes("стройматериал") || commLower.includes("строй материалы") || commLower.includes("строй-материалы") ||
+          commLower.includes("ремонт") || commLower.includes("краск") || commLower.includes("плитк") || commLower.includes("цемент")
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование и стройматериалы для ремонта");
+          if (idx !== -1) return idx;
+        }
+        if (
+          (commLower.includes("обустройство") && commLower.includes("салон")) ||
+          commLower.includes("телевизор") || commLower.includes("акустик") || commLower.includes("диван") || commLower.includes("ресепшн")
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование, электроника и обустройство зон салона");
+          if (idx !== -1) return idx;
+        }
+        if (
+          (commLower.includes("обустройство") && commLower.includes("мастер")) ||
+          commLower.includes("кресло мастера") || commLower.includes("стул мастера") || commLower.includes("зеркало") || commLower.includes("кушетк")
+        ) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Оборудование и обустройство зон мастеров");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("кредит")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Кредиты");
+          if (idx !== -1) return idx;
+        }
+      }
+
+      if (bounds.sectionName === "fixed_expenses") {
+        if (commLower.includes("электрич") || commLower.includes("свет") || commLower.includes("коммунал") || commLower.includes("жкх")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && (r.label === "Коммунальные платежи" || r.label === "Коммунальные услуги"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("авито") || commLower.includes("hh") || commLower.includes("хх") || commLower.includes("объявл") || commLower.includes("ваканс")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Привлечения новых сотрудников"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("реклам") || commLower.includes("маркетинг") || commLower.includes("таргет")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Реклама, маркетинг"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("связь") || commLower.includes("интернет")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Связь"));
+          if (idx !== -1) return idx;
+        }
+      }
+
+      if (bounds.sectionName === "guest_service") {
+        if (commLower.includes("молок")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Молоко"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("сахар") || commLower.includes("сироп")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Сахар"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("кофе")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Кофе");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("чай")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Чай");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("вода") || commLower.includes("волжанк")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Вода"));
+          if (idx !== -1) return idx;
+        }
+      }
+
+      if (bounds.sectionName === "life_support") {
+        if (commLower.includes("аптечк") || commLower.includes("лекарств")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Аптечка"));
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("такси")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Такси");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("доставк")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Доставка");
+          if (idx !== -1) return idx;
+        }
+      }
+
+      if (bounds.sectionName === "payroll") {
+        if (commLower.includes("мастер")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Зарплата мастеров");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("админ") || commLower.includes("уборщиц") || commLower.includes("smm")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Зарплата административного персонала");
+          if (idx !== -1) return idx;
+        }
+      }
+
+      if (bounds.sectionName === "funds_expenses") {
+        if (commLower.includes("налог")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label === "Налоги");
+          if (idx !== -1) return idx;
+        }
+        if (commLower.includes("обучен")) {
+          const idx = report.findIndex((r, i) => i >= bounds.minIndex && i <= bounds.maxIndex && r.label.includes("Обучения"));
+          if (idx !== -1) return idx;
+        }
+      }
+    }
+
+    // Default row within bounds
+    return bounds.defaultIndex;
+  }
+
+  // Fallback for unclassified categories (or empty category)
+  const catParts = srcCategory
+    .split(/\/\//)
+    .map(p => p.trim())
+    .filter(Boolean);
+
+  if (catParts.length > 0) {
+    for (let partIdx = 0; partIdx < catParts.length; partIdx++) {
+      const partStr = catParts[partIdx];
       let bestPartMatchIdx = -1;
       let maxPartScore = 0;
 
@@ -854,265 +1019,6 @@ function findMatchingRowIndexInternal(
       if (bestPartMatchIdx !== -1 && maxPartScore >= 4) {
         return bestPartMatchIdx;
       }
-    }
-  }
-
-  // 4. SECONDARY ATTRIBUTE / COMMENT ANALYSIS
-  // "при невозможности однозначно отнести к какой либо статье анализируется комментарий"
-
-  // Admin salary check
-  const adminSalaryIndex = report.findIndex(r => r.label === "Зарплата выплаченная");
-  if (adminSalaryIndex !== -1) {
-    const isRaznorabochiy = (text: string): boolean => {
-      if (!text) return false;
-      return text.toLowerCase().includes("разнорабоч");
-    };
-
-    const hasRaznorabochiy =
-      isRaznorabochiy(srcCategory) ||
-      isRaznorabochiy(srcCounterparty) ||
-      isRaznorabochiy(srcComment);
-
-    if (hasRaznorabochiy) {
-      const raznoIdx = report.findIndex(r => r.label === "ЗП Разнорабочие");
-      if (raznoIdx !== -1) return raznoIdx;
-    } else {
-      const isSalaryAndAdvanceComment = (text: string): boolean => {
-        if (!text) return false;
-        const t = text.toLowerCase().trim();
-        const words = t.split(/[^а-яёa-z0-9-]+/iu).filter(w => w.length > 0);
-
-        const hasSalaryKeyword = words.some(w => 
-          w.startsWith("заработная") || 
-          w.startsWith("заработн") || 
-          w.startsWith("зараб") || 
-          w.startsWith("зарплата") || 
-          w.startsWith("зарплат") || 
-          w.startsWith("зарпл") || 
-          w.startsWith("аванс")
-        );
-
-        const hasZpAbbreviation = 
-          words.includes("зп") ||
-          t.includes("з/п") ||
-          t.includes("з.п.") ||
-          t.includes("з-п") ||
-          /(\s|^)з\s+п(\s|$)/iu.test(t);
-
-        if (
-          hasSalaryKeyword ||
-          hasZpAbbreviation ||
-          t.includes("оплата труда")
-        ) {
-          return true;
-        }
-
-        if (/\bза\s+/ui.test(t)) {
-          const nonSalaryKeywords = [
-            "связь", "интернет", "аренд", "воду", "электро", "свет", "коммунал",
-            "продвижен", "реклам", "авито", "лиценз", "доставк", "поставк", "товар",
-            "материал", "кофе", "молок", "сахар", "сироп", "вывоз", "мусор", "охрану", "хостинг"
-          ];
-          if (nonSalaryKeywords.some(kw => t.includes(kw))) {
-            return false;
-          }
-
-          const months = [
-            "январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"
-          ];
-          const hasMonth = months.some(m => t.includes(m));
-          const wList = t.split(/[^a-zа-яё0-9-]+/ui).filter(w => w.length > 0);
-          const zaIndex = wList.indexOf("за");
-          if (zaIndex !== -1 && zaIndex < wList.length - 1) {
-            const nextWord = wList[zaIndex + 1];
-            const commonExclusions = [
-              "весь", "прошлый", "тот", "этот", "один", "два", "три", "день", "две", "всех", "все", "какой-то"
-            ];
-            
-            const looksLikeSurnameOrName = 
-              nextWord.length >= 3 &&
-              !commonExclusions.includes(nextWord) &&
-              (
-                /[а-яё]+(ова|ева|ина|ову|еву|ину|ов|ев|ин|ой|ым|их|ых|юк|ко)$/iu.test(nextWord) ||
-                hasMonth
-              );
-
-            if (looksLikeSurnameOrName) {
-              return true;
-            }
-          }
-
-          if (hasMonth && t.includes("за ")) {
-            return true;
-          }
-        }
-        return false;
-      };
-
-      if (isSalaryAndAdvanceComment(srcComment)) {
-        return adminSalaryIndex;
-      }
-    }
-  }
-
-  // Milk
-  const milkIndex = report.findIndex(r => r.label === "Молоко (обычное/альтернативное)");
-  if (milkIndex !== -1) {
-    const isMilk = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return t.includes("молоко") || t.includes("молок");
-    };
-    if (isMilk(srcCategory) || isMilk(srcCounterparty) || isMilk(srcComment)) {
-      return milkIndex;
-    }
-  }
-
-  // Sugar
-  const sugarIndex = report.findIndex(r => r.label === "Сахар / Сиропы");
-  if (sugarIndex !== -1) {
-    const isSugar = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return t.includes("сахар") || t.includes("сироп");
-    };
-    if (isSugar(srcCategory) || isSugar(srcCounterparty) || isSugar(srcComment)) {
-      return sugarIndex;
-    }
-  }
-
-  // Recruitment
-  const recruitmentIndex = report.findIndex(r => r.label === "Привлечения новых сотрудников (оплата объявлений и др. расходы)");
-  const hasRecruitmentSpecificKeywords = (text: string) => {
-    if (!text) return false;
-    const t = text.toLowerCase();
-    return (
-      t.includes("объявл") ||
-      t.includes("ваканс") ||
-      t.includes("headhunter") ||
-      /\bhh\b/i.test(t) ||
-      /\bхх\b/i.test(t)
-    );
-  };
-  const hasAvito = (text: string) => {
-    if (!text) return false;
-    const t = text.toLowerCase();
-    return t.includes("авито") || t.includes("avito");
-  };
-  const isExplicitRecruitment = 
-    hasRecruitmentSpecificKeywords(srcCategory) || 
-    hasRecruitmentSpecificKeywords(srcCounterparty) || 
-    hasRecruitmentSpecificKeywords(srcComment) ||
-    ((hasAvito(srcCategory) || hasAvito(srcCounterparty) || hasAvito(srcComment)) && 
-     !(srcCategory.toLowerCase().includes("материал") || srcCategory.toLowerCase().includes("товар") || srcCategory.toLowerCase().includes("оборудован") || srcCategory.toLowerCase().includes("мебель")));
-
-  if (recruitmentIndex !== -1 && isExplicitRecruitment) {
-    return recruitmentIndex;
-  }
-
-  // Founders
-  const foundersIndex = report.findIndex(r => r.label === "Выплаты учредителям");
-  if (foundersIndex !== -1) {
-    const isFoundersPayment = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return (
-        t.includes("учредител") ||
-        /\bфо\b/iu.test(t) ||
-        /\bfo\b/iu.test(t) ||
-        text.includes("ФО")
-      );
-    };
-    if (isFoundersPayment(srcCategory) || isFoundersPayment(srcCounterparty) || isFoundersPayment(srcComment)) {
-      return foundersIndex;
-    }
-  }
-
-  // Utilities in comment
-  const commIndex = report.findIndex(r => r.label === "Коммунальные услуги" || r.label === "Коммунальные платежи");
-  if (commIndex !== -1) {
-    const isCommUtility = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return (
-        t.includes("электричеств") ||
-        t.includes("электрич") ||
-        t.includes("электр") ||
-        t.includes("электроэнерг") ||
-        t.includes("электроэн") ||
-        t.includes("эл.энерг") ||
-        t.includes("эл-энерг") ||
-        t.includes("жкх") ||
-        t.includes("жку") ||
-        t.includes("энергосбыт") ||
-        t.includes("жк-услуг") ||
-        t.includes("коммунал") ||
-        t.includes("отоплен") ||
-        t.includes("водоснабж") ||
-        t.includes("водоканал") ||
-        t.includes("горкомхоз") ||
-        t.includes("оплата электричества") ||
-        /\bжкх\b/i.test(t) ||
-        /\bжку\b/i.test(t) ||
-        /\bэл\.?\s*эн\.?\b/i.test(t) ||
-        /\bэл-эн\b/i.test(t)
-      );
-    };
-    
-    if (isCommUtility(srcCategory) || isCommUtility(srcCounterparty) || isCommUtility(srcComment)) {
-      return commIndex;
-    }
-  }
-
-  // Pre-start Equipment & Repair secondary analysis
-  const repairIdx = report.findIndex(r => r.label === "Оборудование и стройматериалы для ремонта");
-  if (repairIdx !== -1) {
-    const isRepair = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return (
-        t.includes("стройматериал") ||
-        t.includes("строй материалы") ||
-        t.includes("строй-материалы") ||
-        t.includes("для ремонта") ||
-        (t.includes("материалы") && t.includes("ремонт")) ||
-        (t.includes("оборудование") && t.includes("ремонт"))
-      );
-    };
-    if (isRepair(srcCategory) || isRepair(srcCounterparty) || isRepair(srcComment)) {
-      return repairIdx;
-    }
-  }
-
-  const salonEquipIdx = report.findIndex(r => r.label === "Оборудование, электроника и обустройство зон салона");
-  if (salonEquipIdx !== -1) {
-    const isSalonEquip = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return (
-        (t.includes("обустройство") && t.includes("салон")) ||
-        (t.includes("электроника") && t.includes("салон")) ||
-        (t.includes("оборудование") && t.includes("салон"))
-      );
-    };
-    if (isSalonEquip(srcCategory) || isSalonEquip(srcCounterparty) || isSalonEquip(srcComment)) {
-      return salonEquipIdx;
-    }
-  }
-
-  const mastersEquipIdx = report.findIndex(r => r.label === "Оборудование и обустройство зон мастеров");
-  if (mastersEquipIdx !== -1) {
-    const isMastersEquip = (text: string) => {
-      if (!text) return false;
-      const t = text.toLowerCase();
-      return (
-        (t.includes("обустройство") && t.includes("мастер")) ||
-        (t.includes("оборудование") && t.includes("мастер")) ||
-        (t.includes("зон") && t.includes("мастер"))
-      );
-    };
-    if (isMastersEquip(srcCategory) || isMastersEquip(srcCounterparty) || isMastersEquip(srcComment)) {
-      return mastersEquipIdx;
     }
   }
 
