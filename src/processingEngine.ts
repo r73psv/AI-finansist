@@ -682,7 +682,9 @@ function findMatchingRowIndexInternal(
       "2026 поставщики", "поставщики", "закупка материалов", "закупка товаров",
       "2026 заработная плата", "заработная плата", "зарплата",
       "выручка", "2026 выручка", "доходы",
-      "расходы за счет фондов", "2026 расходы за счет фондов"
+      "расходы за счет фондов", "2026 расходы за счет фондов",
+      "2026 предстартовые", "предстартовые", "предстартовые расходы", "2026 предстартовые расходы",
+      "2026 дополнительные расходы", "дополнительные расходы", "доп расходы", "доп. расходы"
     ];
 
     for (let partIdx = 0; partIdx < catParts.length; partIdx++) {
@@ -692,6 +694,71 @@ function findMatchingRowIndexInternal(
       // If this part is a broad parent group and there are subsequent parts available, skip to evaluating the next part
       if (partIdx < catParts.length - 1 && parentGroups.some(pg => normPart === pg || normPart.includes(pg))) {
         continue;
+      }
+
+      // Explicit sub-part checks:
+      if (
+        normPart.includes("разнорабоч") ||
+        normPart.includes("зп разнорабоч")
+      ) {
+        const idx = report.findIndex(r => r.label === "ЗП Разнорабочие");
+        if (idx !== -1) return idx;
+      }
+
+      if (
+        normPart.includes("стройматериал") ||
+        normPart.includes("строй материалы") ||
+        normPart.includes("строй-материалы") ||
+        normPart.includes("ремонт") ||
+        (normPart.includes("оборудование") && normPart.includes("ремонт"))
+      ) {
+        const idx = report.findIndex(r => r.label === "Оборудование и стройматериалы для ремонта");
+        if (idx !== -1) return idx;
+      }
+
+      if (
+        normPart.includes("электроника") ||
+        (normPart.includes("обустройство") && normPart.includes("салон")) ||
+        (normPart.includes("зон") && normPart.includes("салон")) ||
+        normPart === "оборудование, электроника и обустройство зон салона"
+      ) {
+        const idx = report.findIndex(r => r.label === "Оборудование, электроника и обустройство зон салона");
+        if (idx !== -1) return idx;
+      }
+
+      if (
+        (normPart.includes("обустройство") && normPart.includes("мастер")) ||
+        (normPart.includes("зон") && normPart.includes("мастер")) ||
+        (normPart.includes("оборудование") && normPart.includes("мастер")) ||
+        normPart === "оборудование и обустройство зон мастеров"
+      ) {
+        const idx = report.findIndex(r => r.label === "Оборудование и обустройство зон мастеров");
+        if (idx !== -1) return idx;
+      }
+
+      if (normPart.includes("кредит")) {
+        const idx = report.findIndex(r => r.label === "Кредиты");
+        if (idx !== -1) return idx;
+      }
+
+      if (normPart.includes("долг") && normPart.includes("инвест")) {
+        const idx = report.findIndex(r => r.label === "Погашение долгов инвесторам");
+        if (idx !== -1) return idx;
+      }
+
+      if (normPart.includes("долг") && normPart.includes("аренд")) {
+        const idx = report.findIndex(r => r.label === "Погашение долгов аренда");
+        if (idx !== -1) return idx;
+      }
+
+      if (
+        normPart === "предстартовые" ||
+        normPart === "2026 предстартовые" ||
+        normPart === "предстартовые расходы" ||
+        normPart === "2026 предстартовые расходы"
+      ) {
+        const idx = report.findIndex(r => r.label === "Предстартовые");
+        if (idx !== -1) return idx;
       }
 
       // Explicit sub-part checks:
@@ -806,7 +873,10 @@ function findMatchingRowIndexInternal(
       isRaznorabochiy(srcCounterparty) ||
       isRaznorabochiy(srcComment);
 
-    if (!hasRaznorabochiy) {
+    if (hasRaznorabochiy) {
+      const raznoIdx = report.findIndex(r => r.label === "ЗП Разнорабочие");
+      if (raznoIdx !== -1) return raznoIdx;
+    } else {
       const isSalaryAndAdvanceComment = (text: string): boolean => {
         if (!text) return false;
         const t = text.toLowerCase().trim();
@@ -991,6 +1061,58 @@ function findMatchingRowIndexInternal(
     
     if (isCommUtility(srcCategory) || isCommUtility(srcCounterparty) || isCommUtility(srcComment)) {
       return commIndex;
+    }
+  }
+
+  // Pre-start Equipment & Repair secondary analysis
+  const repairIdx = report.findIndex(r => r.label === "Оборудование и стройматериалы для ремонта");
+  if (repairIdx !== -1) {
+    const isRepair = (text: string) => {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      return (
+        t.includes("стройматериал") ||
+        t.includes("строй материалы") ||
+        t.includes("строй-материалы") ||
+        t.includes("для ремонта") ||
+        (t.includes("материалы") && t.includes("ремонт")) ||
+        (t.includes("оборудование") && t.includes("ремонт"))
+      );
+    };
+    if (isRepair(srcCategory) || isRepair(srcCounterparty) || isRepair(srcComment)) {
+      return repairIdx;
+    }
+  }
+
+  const salonEquipIdx = report.findIndex(r => r.label === "Оборудование, электроника и обустройство зон салона");
+  if (salonEquipIdx !== -1) {
+    const isSalonEquip = (text: string) => {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      return (
+        (t.includes("обустройство") && t.includes("салон")) ||
+        (t.includes("электроника") && t.includes("салон")) ||
+        (t.includes("оборудование") && t.includes("салон"))
+      );
+    };
+    if (isSalonEquip(srcCategory) || isSalonEquip(srcCounterparty) || isSalonEquip(srcComment)) {
+      return salonEquipIdx;
+    }
+  }
+
+  const mastersEquipIdx = report.findIndex(r => r.label === "Оборудование и обустройство зон мастеров");
+  if (mastersEquipIdx !== -1) {
+    const isMastersEquip = (text: string) => {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      return (
+        (t.includes("обустройство") && t.includes("мастер")) ||
+        (t.includes("оборудование") && t.includes("мастер")) ||
+        (t.includes("зон") && t.includes("мастер"))
+      );
+    };
+    if (isMastersEquip(srcCategory) || isMastersEquip(srcCounterparty) || isMastersEquip(srcComment)) {
+      return mastersEquipIdx;
     }
   }
 
