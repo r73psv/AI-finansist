@@ -1,5 +1,15 @@
 import * as XLSX from 'xlsx';
-import { RawRecord, MetricRow, SalaryEmployee, SalaryProcessingMetrics } from './types';
+import { 
+  RawRecord, 
+  MetricRow, 
+  SalaryEmployee, 
+  SalaryProcessingMetrics, 
+  RevenueItemDetail,
+  RawServiceRecord,
+  ServiceReportItem,
+  ServicesReportSummary,
+  ServicesPreprocessingStats
+} from './types';
 import { FINANCIAL_TEMPLATE } from './financialTemplate';
 
 // String cleaning for fuzzy matching
@@ -11,6 +21,29 @@ export function normalizeString(str: string | null | undefined): string {
     .replace(/[«»„“"'\`’‘]/g, '') // remove quotation marks, backticks and typographical single quotes
     .replace(/\s+/g, ' ') // compress whitespace
     .trim();
+}
+
+// Check if a service/item label is a total summary line (e.g. "Всего", "Итого", "Общий итог")
+export function isTotalSummaryRow(label: string | null | undefined): boolean {
+  if (!label) return false;
+  const norm = normalizeString(label);
+  return (
+    norm === 'всего' ||
+    norm === 'всего:' ||
+    norm === 'итого' ||
+    norm === 'итого:' ||
+    norm === 'общий итог' ||
+    norm === 'общий итог:' ||
+    norm === 'всего по услугам' ||
+    norm === 'итого по услугам' ||
+    norm.startsWith('всего ') ||
+    norm.startsWith('всего:') ||
+    norm.startsWith('всего (') ||
+    norm.startsWith('итого ') ||
+    norm.startsWith('итого:') ||
+    norm.startsWith('итого (') ||
+    norm.startsWith('общий итог')
+  );
 }
 
 // Canonicalize brand synonyms to unify different spellings
@@ -301,10 +334,18 @@ export function parseNumber(val: any): number {
   if (typeof val === 'number') {
     return isNaN(val) ? 0 : parseFloat(val.toFixed(2));
   }
-  if (val === null || val === undefined) return 0;
+  if (val === null || val === undefined || typeof val === 'boolean') return 0;
 
   let str = String(val).trim();
   if (!str) return 0;
+
+  // Normalize typographic minus signs and dashes (e.g. −, –, —, ―, ‒) to standard ASCII minus
+  str = str.replace(/[\u2212\u2013\u2014\u2012\u2015]/g, '-');
+
+  // If cell is just dashes, dots, or empty text indicators, return 0
+  if (/^[-–—\.\s]+$/.test(str) || /^(нет|n\/a|null|undefined|none|empty|прочерк)$/i.test(str)) {
+    return 0;
+  }
 
   // 1. Check for accounting negative notation: (123.45) or (1 500,00 ₽) -> -123.45
   let isNegative = false;
@@ -313,8 +354,8 @@ export function parseNumber(val: any): number {
     str = str.slice(1, -1).trim();
   }
 
-  // 2. Normalize and strip spaces (ordinary space, non-breaking space, etc.)
-  str = str.replace(/[\s\u00A0\u2007\u200F\u202F]/g, '');
+  // 2. Normalize and strip spaces (ordinary space, non-breaking space, thin space, etc.)
+  str = str.replace(/[\s\u00A0\u2007\u200F\u202F\uFEFF]/g, '');
 
   // 3. Keep track of negative sign if it exists outside or inside
   if (str.startsWith('-')) {
@@ -396,19 +437,22 @@ export function parseUploadedSpreadsheet(
   const sampleRow = rawRows[0];
   const keys = Object.keys(sampleRow);
   
-  // Target columns: «Сумма, Р», «Назначение», «Контрагент», «Комментарий», «Дата»
+  // Target columns: «Сумма, Р», «Назначение», «Контрагент», «Комментарий», «Дата», «Услуга/Товар»
   const columnMapping: Record<string, string> = {
     sum: '',
     category: '',
     counterparty: '',
     comment: '',
-    date: ''
+    date: '',
+    serviceProduct: ''
   };
 
   keys.forEach((k) => {
     let lowerKey = k.toLowerCase().trim();
     // Normalize both ruble sign '₽' and English 'p' to Russian 'р'
     lowerKey = lowerKey.replace(/₽/g, 'р').replace(/p/g, 'р');
+    const normKey = lowerKey.replace(/\s+/g, ' ');
+
     if (lowerKey === 'сумма, р' || lowerKey === 'сумма р' || lowerKey === 'сумма,р' || lowerKey === 'сумма') {
       columnMapping.sum = k;
     } else if (lowerKey === 'назначение' || lowerKey === 'категория') {
@@ -419,8 +463,34 @@ export function parseUploadedSpreadsheet(
       columnMapping.comment = k;
     } else if (lowerKey === 'дата' || lowerKey === 'время') {
       columnMapping.date = k;
+    } else if (
+      normKey === 'услуга/товар' ||
+      normKey === 'услуга / товар' ||
+      normKey === 'товар/услуга' ||
+      normKey === 'товар / услуга' ||
+      normKey === 'услуга' ||
+      normKey === 'услуги' ||
+      normKey === 'услуга, товар' ||
+      normKey === 'услуги/товары' ||
+      normKey === 'услуга или товар' ||
+      normKey === 'номенклатура' ||
+      normKey === 'наименование услуги/товара' ||
+      normKey === 'наименование услуги' ||
+      normKey === 'наименование товара' ||
+      normKey === 'наименование' ||
+      normKey === 'позиция' ||
+      normKey === 'товар' ||
+      normKey.includes('услуга/товар') ||
+      normKey.includes('товар/услуга')
+    ) {
+      columnMapping.serviceProduct = k;
     }
   });
+
+  // If category wasn't found under "Назначение", but "Услуга/Товар" was found, fallback category to it
+  if (!columnMapping.category && columnMapping.serviceProduct) {
+    columnMapping.category = columnMapping.serviceProduct;
+  }
 
   // Check required columns exactly as per checklist
   const missingColumns: string[] = [];
@@ -445,11 +515,12 @@ export function parseUploadedSpreadsheet(
     const catVal = String(row[columnMapping.category] || '').trim();
     const contVal = String(row[columnMapping.counterparty] || '').trim();
     const commVal = String(row[columnMapping.comment] || '').trim();
+    const spVal = columnMapping.serviceProduct ? String(row[columnMapping.serviceProduct] || '').trim() : '';
     const dateRaw = row[columnMapping.date];
     const parsedDate = parseDate(dateRaw);
 
     // If all essential fields are blank, skip this row
-    if (!catVal && !contVal && sumVal === 0) {
+    if (!catVal && !contVal && !spVal && sumVal === 0) {
       return;
     }
 
@@ -459,6 +530,7 @@ export function parseUploadedSpreadsheet(
       category: catVal,
       counterparty: contVal,
       comment: commVal,
+      serviceProduct: spVal,
       date: parsedDate,
       dateStr: String(dateRaw || '').trim(),
       rawIndex: index + 2 // 1-based index + excel header row offset
@@ -538,6 +610,90 @@ export function getReverseMatchingScore(srcCategory: string, tgtLabel: string): 
   }
   
   return score;
+}
+
+// Group and sum records by "Услуга/Товар" for the revenue detailing
+export function groupRevenueByServiceProduct(records: RawRecord[]): RevenueItemDetail[] {
+  const revenueCategories = [
+    'выручка общая',
+    'выручка с услуг',
+    'выручка с товаров',
+    'пополнение счёта',
+    'пополнение счета',
+    'выручка с сертификатов',
+    'доход от продажи абонементов',
+    'прочие доходы',
+    'выручка',
+    'доход'
+  ];
+
+  const map = new Map<string, {
+    canonicalName: string;
+    sum: number;
+    count: number;
+    category: string;
+    transactions: RawRecord[];
+  }>();
+
+  records.forEach((rec) => {
+    const rawSP = (rec.serviceProduct || '').trim();
+    const cat = (rec.category || '').trim();
+    const normCat = normalizeString(cat);
+
+    const isExpense = 
+      normCat.includes('расход') || 
+      normCat.includes('зарплат') || 
+      normCat.includes('аренд') || 
+      normCat.includes('закупк') ||
+      normCat.includes('налог') ||
+      normCat.includes('комисси') ||
+      normCat.includes('подписк');
+
+    const isRevenue = 
+      revenueCategories.some(rc => normCat.includes(rc)) ||
+      normCat.includes('услуг') ||
+      normCat.includes('товар') ||
+      normCat.includes('сертификат') ||
+      normCat.includes('абонемент') ||
+      normCat.includes('депозит') ||
+      normCat.includes('поступлен') ||
+      (!isExpense && rec.sum > 0);
+
+    if (!isRevenue) return;
+
+    // Use rawSP if available, or fallback to cat
+    const itemName = rawSP || cat || 'Без наименования услуги/товара';
+    if (isTotalSummaryRow(itemName)) return;
+    const normKey = normalizeString(itemName);
+    if (!normKey) return;
+
+    const existing = map.get(normKey);
+    if (existing) {
+      existing.sum += rec.sum;
+      existing.count += 1;
+      existing.transactions.push(rec);
+    } else {
+      map.set(normKey, {
+        canonicalName: itemName,
+        sum: rec.sum,
+        count: 1,
+        category: cat || 'Выручка',
+        transactions: [rec]
+      });
+    }
+  });
+
+  const result: RevenueItemDetail[] = Array.from(map.values()).map(item => ({
+    name: item.canonicalName,
+    sum: parseFloat(item.sum.toFixed(2)),
+    count: item.count,
+    category: item.category,
+    transactions: item.transactions
+  }));
+
+  // Sort by sum descending
+  result.sort((a, b) => b.sum - a.sum);
+  return result;
 }
 
 // Find predefined supplier index from original config
@@ -711,9 +867,45 @@ function findMatchingRowIndexInternal(
   report: MetricRow[],
   N: number = 0,
   srcComment: string = "",
-  fileName?: string | null
+  fileName?: string | null,
+  srcServiceProduct: string = ""
 ): number {
   const normCat = normalizeString(srcCategory);
+  const normSP = normalizeString(srcServiceProduct);
+
+  // 0. CHECK "Услуга/Товар" if present
+  if (normSP) {
+    if (normSP.includes("сертификат")) {
+      const idx = report.findIndex(r => r.label === "Выручка с сертификатов");
+      if (idx !== -1) return idx;
+    }
+    if (normSP.includes("абонемент")) {
+      const idx = report.findIndex(r => r.label === "Доход от продажи абонементов");
+      if (idx !== -1) return idx;
+    }
+    if (normSP.includes("депозит") || normSP.includes("пополнение счет") || normSP.includes("пополнение счет")) {
+      const idx = report.findIndex(r => r.label === "Пополнение счёта" || r.label === "Пополнение счета");
+      if (idx !== -1) return idx;
+    }
+    const isRetailProduct = 
+      normSP.includes("шампун") || normSP.includes("бальзам") || normSP.includes("кондиционер") ||
+      normSP.includes("маск") || normSP.includes("сыворотк") || normSP.includes("масл") ||
+      normSP.includes("крем") || normSP.includes("спрей") || normSP.includes("косметик") ||
+      normSP.includes("паст") || normSP.includes("воск") || normSP.includes("гель") || normSP.includes("лак");
+    if (isRetailProduct) {
+      const idx = report.findIndex(r => r.label === "Выручка с товаров");
+      if (idx !== -1) return idx;
+    }
+    const isService = 
+      normSP.includes("стрижк") || normSP.includes("окрашиван") || normSP.includes("маникюр") ||
+      normSP.includes("педикюр") || normSP.includes("укладк") || normSP.includes("массаж") ||
+      normSP.includes("бров") || normSP.includes("ресниц") || normSP.includes("эпиляц") ||
+      normSP.includes("уход") || normSP.includes("услуг");
+    if (isService) {
+      const idx = report.findIndex(r => r.label === "Выручка с услуг");
+      if (idx !== -1) return idx;
+    }
+  }
 
   // 1. FILE-SPECIFIC OVERRIDE RULES
   if (fileName) {
@@ -1034,10 +1226,11 @@ export function findMatchingRowIndex(
   report: MetricRow[],
   N: number = 0,
   srcComment: string = "",
-  fileName?: string | null
+  fileName?: string | null,
+  srcServiceProduct: string = ""
 ): number {
   // First pass: match with no comment
-  let firstPassIdx = findMatchingRowIndexInternal(srcCategory, srcCounterparty, report, N, "", fileName);
+  let firstPassIdx = findMatchingRowIndexInternal(srcCategory, srcCounterparty, report, N, "", fileName, srcServiceProduct);
   if (firstPassIdx !== -1) {
     if (report[firstPassIdx]?.label === "Зарплата административного персонала") {
       const backupIdx = report.findIndex(r => r.label === "Зарплата выплаченная");
@@ -1047,7 +1240,7 @@ export function findMatchingRowIndex(
   }
   
   // Second pass: fallback to checking "Комментарий"
-  const secondPassIdx = findMatchingRowIndexInternal(srcCategory, srcCounterparty, report, N, srcComment, fileName);
+  const secondPassIdx = findMatchingRowIndexInternal(srcCategory, srcCounterparty, report, N, srcComment, fileName, srcServiceProduct);
   if (secondPassIdx !== -1 && report[secondPassIdx]?.label === "Зарплата административного персонала") {
     const backupIdx = report.findIndex(r => r.label === "Зарплата выплаченная");
     if (backupIdx !== -1) return backupIdx;
@@ -1194,7 +1387,11 @@ export function generateFinancialReport(
   categoryMappings: Record<string, string> = {},
   transactionMappings: Record<string, string> = {},
   fileName?: string | null
-): { report: MetricRow[]; extraRows: { label: string; value: number; transactions: RawRecord[] }[] } {
+): { 
+  report: MetricRow[]; 
+  extraRows: { label: string; value: number; transactions: RawRecord[] }[]; 
+  revenueDetails: RevenueItemDetail[];
+} {
   const unmatchedCategoriesMap: Record<string, number> = {};
 
   // Filter out transfers ("Перевод средств") which do not participate in report generation
@@ -1293,7 +1490,7 @@ export function generateFinancialReport(
 
     // 3. Fallback to automatic heuristic rules matcher
     if (matchedIdx === -1) {
-      matchedIdx = findMatchingRowIndex(rec.category, rec.counterparty, report, N, rec.comment, fileName);
+      matchedIdx = findMatchingRowIndex(rec.category, rec.counterparty, report, N, rec.comment, fileName, rec.serviceProduct || '');
     }
 
     if (matchedIdx !== -1) {
@@ -1344,14 +1541,33 @@ export function generateFinancialReport(
   // 4. Calculate formulas
   const finalReport = calculateReportFormulas(report, N);
 
-  // 5. Format extra categories to return
+  // 5. Build Revenue Detailing by grouping and summing "Услуга/Товар"
+  finalReport.forEach((row) => {
+    if (row.index >= 1 && row.index <= 7 && row.transactions && row.transactions.length > 0) {
+      row.revenueDetails = groupRevenueByServiceProduct(row.transactions);
+    }
+  });
+
+  const allRevenueTransactions = finalReport
+    .filter(r => r.index >= 1 && r.index <= 7)
+    .flatMap(r => r.transactions || []);
+  
+  const totalRevenueDetails = groupRevenueByServiceProduct(
+    allRevenueTransactions.length > 0 ? allRevenueTransactions : filteredRecords.filter(r => r.sum > 0)
+  );
+
+  if (finalReport[0]) {
+    finalReport[0].revenueDetails = totalRevenueDetails;
+  }
+
+  // 6. Format extra categories to return
   const extraRows = Object.entries(unmatchedCategoriesEntries).map(([label, entry]) => ({
     label,
     value: parseFloat(entry.value.toFixed(2)),
     transactions: entry.transactions
   }));
 
-  return { report: finalReport, extraRows };
+  return { report: finalReport, extraRows, revenueDetails: totalRevenueDetails };
 }
 
 // Core salary period splitting logic
@@ -1457,12 +1673,13 @@ export function processSalaryPayments(
 // Generate Financial Report Spreadsheet
 export function downloadFinancialSpreadsheet(
   report: MetricRow[],
-  extraRows: { label: string; value: number }[]
+  extraRows: { label: string; value: number }[],
+  revenueDetails?: RevenueItemDetail[]
 ): void {
   const wb = XLSX.utils.book_new();
   
   // Format rows data
-  const data = report.map((r) => ({
+  const data: Record<string, any>[] = report.map((r) => ({
     'Показатели': r.label,
     'Сумма': r.value
   }));
@@ -1478,16 +1695,80 @@ export function downloadFinancialSpreadsheet(
     });
   }
 
+  // Append revenue detailing section (grouped and summed by Услуга/Товар)
+  if (revenueDetails && revenueDetails.length > 0) {
+    data.push({ 'Показатели': '--- ДЕТАЛИЗАЦИЯ ДОХОДНОЙ ЧАСТИ (УСЛУГА/ТОВАР) ---', 'Сумма': 0 });
+    revenueDetails.forEach((item) => {
+      data.push({
+        'Показатели': `  • ${item.name} (${item.count} операций)`,
+        'Сумма': item.sum
+      });
+    });
+  }
+
   const ws = XLSX.utils.json_to_sheet(data);
 
   // Set widths for neat display
-  const colWidths = [{ wch: 70 }, { wch: 15 }];
+  const colWidths = [{ wch: 70 }, { wch: 18 }];
   ws['!cols'] = colWidths;
 
   XLSX.utils.book_append_sheet(wb, ws, "Финансовый Отчет");
+
+  // If revenue details exist, create a dedicated detailed worksheet
+  if (revenueDetails && revenueDetails.length > 0) {
+    const totalRev = report.find(r => r.label === "Выручка общая")?.value || 
+      revenueDetails.reduce((acc, curr) => acc + curr.sum, 0);
+
+    const revSheetData = revenueDetails.map((item, idx) => ({
+      '№': idx + 1,
+      'Услуга / Товар': item.name,
+      'Категория': item.category,
+      'Количество операций': item.count,
+      'Сумма (₽)': item.sum,
+      'Доля от выручки (%)': totalRev > 0 ? parseFloat(((item.sum / totalRev) * 100).toFixed(2)) : 0
+    }));
+
+    const wsRev = XLSX.utils.json_to_sheet(revSheetData);
+    wsRev['!cols'] = [
+      { wch: 6 },
+      { wch: 45 },
+      { wch: 25 },
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 22 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsRev, "Детализация доходов");
+  }
   
   // Generate download
   XLSX.writeFile(wb, "Финансовый отчет.xlsx");
+}
+
+// Generate Dedicated Revenue Detailing Spreadsheet
+export function downloadRevenueSpreadsheet(revenueDetails: RevenueItemDetail[], totalRevenue: number): void {
+  const wb = XLSX.utils.book_new();
+
+  const data = revenueDetails.map((item, idx) => ({
+    '№': idx + 1,
+    'Услуга / Товар': item.name,
+    'Категория': item.category,
+    'Количество операций': item.count,
+    'Сумма (₽)': item.sum,
+    'Доля от выручки (%)': totalRevenue > 0 ? parseFloat(((item.sum / totalRevenue) * 100).toFixed(2)) : 0
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 6 },
+    { wch: 45 },
+    { wch: 25 },
+    { wch: 22 },
+    { wch: 18 },
+    { wch: 22 }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Детализация доходов");
+  XLSX.writeFile(wb, "Детализация доходов (Услуга-Товар).xlsx");
 }
 
 // Generate Salary Payments Spreadsheet
@@ -1511,3 +1792,395 @@ export function downloadSalarySpreadsheet(employees: SalaryEmployee[]): void {
 
   XLSX.writeFile(wb, "Зарплатные выплаты.xlsx");
 }
+
+// Parse Services spreadsheet from uploaded workbook with comprehensive numeric preprocessing
+export function parseServicesSpreadsheet(workbook: XLSX.WorkBook): { 
+  records: RawServiceRecord[]; 
+  errors: string[];
+  stats: ServicesPreprocessingStats;
+} {
+  const errors: string[] = [];
+  const records: RawServiceRecord[] = [];
+
+  const defaultStats: ServicesPreprocessingStats = {
+    totalRows: 0,
+    validServiceRows: 0,
+    cleanedFieldsCount: 0,
+    recognizedColumns: { service: '' }
+  };
+
+  const firstSheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[firstSheetName];
+  if (!sheet) {
+    return { records: [], errors: ['Файл пуст или лист таблицы не найден.'], stats: defaultStats };
+  }
+
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
+  if (rawRows.length === 0) {
+    return { records: [], errors: ['Таблица не содержит строк с данными.'], stats: defaultStats };
+  }
+
+  const keys = Object.keys(rawRows[0]);
+  const columnMapping = {
+    service: '',
+    discount: '',
+    points: '',
+    subscriptions: '',
+    certificates: '',
+    clientAccounts: '',
+    money: '',
+    directRevenue: ''
+  };
+
+  keys.forEach((k) => {
+    let lowerKey = k.toLowerCase().trim().replace(/₽/g, 'р').replace(/p/g, 'р');
+    const normKey = lowerKey.replace(/\s+/g, ' ');
+
+    if (
+      normKey === 'услуга' || 
+      normKey === 'наименование услуги' || 
+      normKey === 'наименование' || 
+      normKey === 'номенклатура' ||
+      normKey === 'услуга/товар' ||
+      normKey === 'услуга / товар' ||
+      normKey.startsWith('услуг')
+    ) {
+      columnMapping.service = k;
+    } else if (normKey.includes('скидк') || normKey.includes('дисконт')) {
+      columnMapping.discount = k;
+    } else if (normKey.includes('балл') || normKey.includes('бонус')) {
+      columnMapping.points = k;
+    } else if (normKey.includes('абонемент')) {
+      columnMapping.subscriptions = k;
+    } else if (normKey.includes('сертификат')) {
+      columnMapping.certificates = k;
+    } else if (
+      normKey.includes('со счетов') || 
+      normKey.includes('счетов клиент') || 
+      normKey.includes('со счета') ||
+      normKey.includes('со счёта') ||
+      normKey.includes('со счётов') ||
+      normKey.includes('счет клиента') ||
+      normKey.includes('счета клиентов') ||
+      normKey.includes('счёт клиента') ||
+      normKey.includes('депозит') ||
+      normKey.includes('баланс')
+    ) {
+      columnMapping.clientAccounts = k;
+    } else if (
+      normKey.includes('деньг') || 
+      normKey.includes('наличн') || 
+      normKey.includes('безналичн') || 
+      normKey.includes('оплачено деньгами') ||
+      normKey.includes('касса') ||
+      normKey.includes('картой') ||
+      normKey.includes('эквайринг')
+    ) {
+      columnMapping.money = k;
+    } else if (normKey.includes('выручк') || normKey === 'сумма выручки' || normKey === 'стоимость' || normKey === 'сумма') {
+      columnMapping.directRevenue = k;
+    }
+  });
+
+  if (!columnMapping.service) {
+    const potentialKey = keys.find(k => {
+      const lower = k.toLowerCase();
+      return !lower.includes('скидк') && !lower.includes('дисконт') && !lower.includes('балл') && !lower.includes('бонус') && !lower.includes('абонем') && !lower.includes('сертиф') && !lower.includes('счет') && !lower.includes('деньг');
+    });
+    if (potentialKey) {
+      columnMapping.service = potentialKey;
+    } else {
+      return {
+        records: [],
+        errors: ['Не найдена графа «Услуга». Пожалуйста, проверьте наличие заголовка «Услуга» в первой строке файла.'],
+        stats: defaultStats
+      };
+    }
+  }
+
+  let cleanedFieldsCount = 0;
+
+  rawRows.forEach((row, idx) => {
+    const sName = String(row[columnMapping.service] || '').trim();
+    if (!sName) return;
+
+    // Exclude summary/total rows (e.g. "Всего", "Всего:", "Итого", "Итого:") in the "Услуга" column
+    if (isTotalSummaryRow(sName)) {
+      return;
+    }
+
+    // Apply strict numeric preprocessing to all financial indicators
+    let discountVal = 0;
+    if (columnMapping.discount && row[columnMapping.discount] !== '') {
+      discountVal = Math.abs(parseNumber(row[columnMapping.discount]));
+      cleanedFieldsCount++;
+    }
+
+    let pointsVal = 0;
+    if (columnMapping.points && row[columnMapping.points] !== '') {
+      pointsVal = parseNumber(row[columnMapping.points]);
+      cleanedFieldsCount++;
+    }
+
+    let subsVal = 0;
+    if (columnMapping.subscriptions && row[columnMapping.subscriptions] !== '') {
+      subsVal = parseNumber(row[columnMapping.subscriptions]);
+      cleanedFieldsCount++;
+    }
+
+    let certVal = 0;
+    if (columnMapping.certificates && row[columnMapping.certificates] !== '') {
+      certVal = parseNumber(row[columnMapping.certificates]);
+      cleanedFieldsCount++;
+    }
+
+    let clientAccVal = 0;
+    if (columnMapping.clientAccounts && row[columnMapping.clientAccounts] !== '') {
+      clientAccVal = parseNumber(row[columnMapping.clientAccounts]);
+      cleanedFieldsCount++;
+    }
+
+    let moneyVal = 0;
+    if (columnMapping.money && row[columnMapping.money] !== '') {
+      moneyVal = parseNumber(row[columnMapping.money]);
+      cleanedFieldsCount++;
+    }
+
+    let revenueVal = pointsVal + subsVal + certVal + clientAccVal + moneyVal;
+    if (revenueVal === 0 && columnMapping.directRevenue && row[columnMapping.directRevenue] !== '') {
+      revenueVal = parseNumber(row[columnMapping.directRevenue]);
+      cleanedFieldsCount++;
+    }
+
+    records.push({
+      id: `svc_rec_${idx}_${Date.now()}`,
+      rawIndex: idx + 2,
+      service: sName,
+      discount: discountVal,
+      points: pointsVal,
+      subscriptions: subsVal,
+      certificates: certVal,
+      clientAccounts: clientAccVal,
+      money: moneyVal,
+      revenue: parseFloat(revenueVal.toFixed(2))
+    });
+  });
+
+  const stats: ServicesPreprocessingStats = {
+    totalRows: rawRows.length,
+    validServiceRows: records.length,
+    cleanedFieldsCount,
+    recognizedColumns: {
+      service: columnMapping.service,
+      discount: columnMapping.discount || undefined,
+      points: columnMapping.points || undefined,
+      subscriptions: columnMapping.subscriptions || undefined,
+      certificates: columnMapping.certificates || undefined,
+      clientAccounts: columnMapping.clientAccounts || undefined,
+      money: columnMapping.money || undefined,
+      directRevenue: columnMapping.directRevenue || undefined
+    }
+  };
+
+  return { records, errors, stats };
+}
+
+// Generate Services Report with Cost Allocation
+export function generateServicesReport(
+  records: RawServiceRecord[],
+  totalVariableExpenses: number,
+  totalFixedExpenses: number
+): { items: ServiceReportItem[]; summary: ServicesReportSummary } {
+  const map = new Map<string, {
+    canonicalName: string;
+    count: number;
+    discount: number;
+    points: number;
+    subscriptions: number;
+    certificates: number;
+    clientAccounts: number;
+    money: number;
+    revenue: number;
+    rawRows: RawServiceRecord[];
+  }>();
+
+  records.forEach((rec) => {
+    if (isTotalSummaryRow(rec.service)) return;
+    const key = normalizeString(rec.service);
+    if (!key) return;
+
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.discount += rec.discount;
+      existing.points += rec.points;
+      existing.subscriptions += rec.subscriptions;
+      existing.certificates += rec.certificates;
+      existing.clientAccounts += rec.clientAccounts;
+      existing.money += rec.money;
+      existing.revenue += rec.revenue;
+      existing.rawRows.push(rec);
+    } else {
+      map.set(key, {
+        canonicalName: rec.service,
+        count: 1,
+        discount: rec.discount,
+        points: rec.points,
+        subscriptions: rec.subscriptions,
+        certificates: rec.certificates,
+        clientAccounts: rec.clientAccounts,
+        money: rec.money,
+        revenue: rec.revenue,
+        rawRows: [rec]
+      });
+    }
+  });
+
+  let totalRevenue = 0;
+  let totalDiscount = 0;
+  let totalPoints = 0;
+  let totalSubscriptions = 0;
+  let totalCertificates = 0;
+  let totalClientAccounts = 0;
+  let totalMoney = 0;
+  let totalCount = 0;
+
+  map.forEach((item) => {
+    totalRevenue += item.revenue;
+    totalDiscount += item.discount;
+    totalPoints += item.points;
+    totalSubscriptions += item.subscriptions;
+    totalCertificates += item.certificates;
+    totalClientAccounts += item.clientAccounts;
+    totalMoney += item.money;
+    totalCount += item.count;
+  });
+
+  const absVariable = Math.abs(totalVariableExpenses);
+  const absFixed = Math.abs(totalFixedExpenses);
+
+  const items: ServiceReportItem[] = Array.from(map.values()).map((item) => {
+    const share = totalRevenue > 0 ? (item.revenue / totalRevenue) : 0;
+    const variableCost = parseFloat((absVariable * share).toFixed(2));
+    const fixedCost = parseFloat((absFixed * share).toFixed(2));
+    const totalCost = parseFloat((variableCost + fixedCost).toFixed(2));
+    const profit = parseFloat((item.revenue - totalCost).toFixed(2));
+    const profitability = item.revenue > 0 ? parseFloat(((profit / item.revenue) * 100).toFixed(2)) : 0;
+
+    return {
+      service: item.canonicalName,
+      count: item.count,
+      discount: parseFloat(item.discount.toFixed(2)),
+      points: parseFloat(item.points.toFixed(2)),
+      subscriptions: parseFloat(item.subscriptions.toFixed(2)),
+      certificates: parseFloat(item.certificates.toFixed(2)),
+      clientAccounts: parseFloat(item.clientAccounts.toFixed(2)),
+      money: parseFloat(item.money.toFixed(2)),
+      revenue: parseFloat(item.revenue.toFixed(2)),
+      revenueShare: parseFloat((share * 100).toFixed(2)),
+      variableCost,
+      fixedCost,
+      totalCost,
+      profit,
+      profitability,
+      rawRows: item.rawRows
+    };
+  });
+
+  // Sort descending by revenue
+  items.sort((a, b) => b.revenue - a.revenue);
+
+  const totalCost = parseFloat((absVariable + absFixed).toFixed(2));
+  const totalProfit = parseFloat((totalRevenue - totalCost).toFixed(2));
+  const totalProfitability = totalRevenue > 0 ? parseFloat(((totalProfit / totalRevenue) * 100).toFixed(2)) : 0;
+
+  const summary: ServicesReportSummary = {
+    totalCount,
+    totalDiscount: parseFloat(totalDiscount.toFixed(2)),
+    totalPoints: parseFloat(totalPoints.toFixed(2)),
+    totalSubscriptions: parseFloat(totalSubscriptions.toFixed(2)),
+    totalCertificates: parseFloat(totalCertificates.toFixed(2)),
+    totalClientAccounts: parseFloat(totalClientAccounts.toFixed(2)),
+    totalMoney: parseFloat(totalMoney.toFixed(2)),
+    totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+    totalVariableCost: absVariable,
+    totalFixedCost: absFixed,
+    totalCost,
+    totalProfit,
+    totalProfitability
+  };
+
+  return { items, summary };
+}
+
+// Download Services Report Spreadsheet
+export function downloadServicesSpreadsheet(
+  items: ServiceReportItem[],
+  summary: ServicesReportSummary,
+  fileName: string = 'Отчет_по_услугам.xlsx'
+): void {
+  const wb = XLSX.utils.book_new();
+
+  const data = items.map((item, idx) => ({
+    '№': idx + 1,
+    'Услуга': item.service,
+    'Кол-во': item.count,
+    'Скидка': item.discount,
+    'Баллы': item.points,
+    'Абонементы': item.subscriptions,
+    'Сертификаты': item.certificates,
+    'Оплачено со счетов клиентов, ₽': item.clientAccounts,
+    'Оплачено деньгами, ₽': item.money,
+    'Сумма выручки': item.revenue,
+    'Доля в выручке (%)': item.revenueShare,
+    'Переменные затраты': item.variableCost,
+    'Постоянные затраты': item.fixedCost,
+    'Всего затрат': item.totalCost,
+    'Прибыль': item.profit,
+    'Рентабельность (%)': item.profitability
+  }));
+
+  // Append Total Row (Общий итог)
+  data.push({
+    '№': '' as any,
+    'Услуга': 'ИТОГО ПО ВСЕМ УСЛУГАМ',
+    'Кол-во': summary.totalCount,
+    'Скидка': summary.totalDiscount,
+    'Баллы': summary.totalPoints,
+    'Абонементы': summary.totalSubscriptions,
+    'Сертификаты': summary.totalCertificates,
+    'Оплачено со счетов клиентов, ₽': summary.totalClientAccounts,
+    'Оплачено деньгами, ₽': summary.totalMoney,
+    'Сумма выручки': summary.totalRevenue,
+    'Доля в выручке (%)': 100,
+    'Переменные затраты': summary.totalVariableCost,
+    'Постоянные затраты': summary.totalFixedCost,
+    'Всего затрат': summary.totalCost,
+    'Прибыль': summary.totalProfit,
+    'Рентабельность (%)': summary.totalProfitability
+  });
+
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 6 },
+    { wch: 38 },
+    { wch: 10 },
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 28 },
+    { wch: 22 },
+    { wch: 16 },
+    { wch: 18 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 18 }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Отчет по услугам');
+  XLSX.writeFile(wb, fileName);
+}
+

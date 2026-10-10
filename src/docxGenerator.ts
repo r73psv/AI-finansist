@@ -1,5 +1,6 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
-import { MetricRow, RawRecord } from "./types";
+import { MetricRow, RawRecord, RevenueItemDetail } from "./types";
+import { groupRevenueByServiceProduct } from "./processingEngine";
 
 // Helper function to format numeric values matching users spacing conventions
 function formatNum(val: number, forceNegative: boolean = false, extraSpaces: string = ""): string {
@@ -49,7 +50,8 @@ export function getReportPeriodString(records: RawRecord[]): string {
 export async function downloadDocxReport(
   report: MetricRow[],
   records: RawRecord[],
-  categoryMappings: Record<string, string>
+  categoryMappings: Record<string, string>,
+  revenueDetails?: RevenueItemDetail[]
 ) {
   const getVal = (label: string): number => {
     return report.find(r => r.label === label)?.value || 0;
@@ -164,6 +166,48 @@ export async function downloadDocxReport(
 
   const strFoundersPayout = formatNum(foundersPayout, true, " ");
 
+  // Detailing of revenue by "Услуга/Товар"
+  const revDetails = (revenueDetails && revenueDetails.length > 0)
+    ? revenueDetails
+    : (report[0]?.revenueDetails && report[0].revenueDetails.length > 0)
+    ? report[0].revenueDetails
+    : groupRevenueByServiceProduct(records);
+
+  const revenueDetailParagraphs: Paragraph[] = [];
+  if (revDetails.length > 0) {
+    revenueDetailParagraphs.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Детализация доходов (графа «Услуга/Товар»):`,
+            italics: true,
+            bold: true,
+            size: 21,
+            font: "Calibri",
+            color: "444444"
+          })
+        ],
+        spacing: { before: 80, after: 40 }
+      })
+    );
+
+    revDetails.forEach((item) => {
+      revenueDetailParagraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: `  • ${item.name} : ${formatNum(item.sum)} ₽ (${item.count} оп.)`,
+              size: 20,
+              font: "Calibri",
+              color: "555555"
+            })
+          ],
+          spacing: { after: 25 }
+        })
+      );
+    });
+  }
+
   // Create document
   const doc = new Document({
     sections: [
@@ -236,7 +280,14 @@ export async function downloadDocxReport(
             children: [
               new TextRun({ text: `- Прочие доходы : ${strOtherRevenue}`, size: 22, font: "Calibri" })
             ],
-            spacing: { after: 200 }
+            spacing: { after: 60 }
+          }),
+          ...revenueDetailParagraphs,
+          new Paragraph({
+            children: [
+              new TextRun({ text: "", size: 22 })
+            ],
+            spacing: { after: 140 }
           }),
 
           // Total Expenses Header

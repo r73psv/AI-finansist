@@ -7,6 +7,15 @@ export interface RawRecord {
   date: Date | null; // «Дата» parsed
   dateStr: string; // original raw date text
   rawIndex: number; // line number of source file
+  serviceProduct?: string; // «Услуга/Товар»
+}
+
+export interface RevenueItemDetail {
+  name: string; // Наименование из графы «Услуга/Товар»
+  sum: number; // Просуммированная сумма совпадающих строк
+  count: number; // Количество сгруппированных строк
+  category: string; // Категория (Выручка с услуг, Выручка с товаров и т.д.)
+  transactions: RawRecord[];
 }
 
 export interface MetricRow {
@@ -17,6 +26,7 @@ export interface MetricRow {
   isCustomOverride?: boolean;
   formula?: string;
   transactions?: RawRecord[];
+  revenueDetails?: RevenueItemDetail[];
 }
 
 export interface SalaryEmployee {
@@ -31,4 +41,68 @@ export interface SalaryProcessingMetrics {
   matchingSalaryCount: number;
   pastPeriodCount: number;
   reportPeriodCount: number;
+}
+
+export interface RawServiceRecord {
+  id: string;
+  rawIndex: number;
+  service: string; // «Услуга»
+  discount: number; // «Скидка»
+  points: number; // «Баллы»
+  subscriptions: number; // «Абонементы»
+  certificates: number; // «Сертификаты»
+  clientAccounts: number; // «Оплачено со счетов клиентов, ₽»
+  money: number; // «Оплачено деньгами, ₽»
+  revenue: number; // Сумма выручки
+}
+
+export interface ServiceReportItem {
+  service: string;
+  count: number;
+  discount: number;
+  points: number;
+  subscriptions: number;
+  certificates: number;
+  clientAccounts: number;
+  money: number;
+  revenue: number;
+  revenueShare: number; // %
+  variableCost: number;
+  fixedCost: number;
+  totalCost: number;
+  profit: number;
+  profitability: number; // %
+  rawRows: RawServiceRecord[];
+}
+
+export interface ServicesReportSummary {
+  totalCount: number;
+  totalDiscount: number;
+  totalPoints: number;
+  totalSubscriptions: number;
+  totalCertificates: number;
+  totalClientAccounts: number;
+  totalMoney: number;
+  totalRevenue: number;
+  totalVariableCost: number;
+  totalFixedCost: number;
+  totalCost: number;
+  totalProfit: number;
+  totalProfitability: number;
+}
+
+export interface ServicesPreprocessingStats {
+  totalRows: number;
+  validServiceRows: number;
+  cleanedFieldsCount: number;
+  recognizedColumns: {
+    service: string;
+    discount?: string;
+    points?: string;
+    subscriptions?: string;
+    certificates?: string;
+    clientAccounts?: string;
+    money?: string;
+    directRevenue?: string;
+  };
 }

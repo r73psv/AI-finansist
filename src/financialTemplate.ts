@@ -1,11 +1,6 @@
-export interface MetricRow {
-  index: number; // 0-based index
-  label: string;
-  type: 'header' | 'data' | 'formula' | 'section';
-  value: number;
-  isCustomOverride?: boolean; // If overridden by user
-  formula?: string; // Informational formula description
-}
+import { MetricRow } from './types';
+
+export type { MetricRow };
 
 export const FINANCIAL_TEMPLATE: Omit<MetricRow, 'value'>[] = [
   { index: 0, label: "Выручка общая", type: "formula", formula: "Сумма статей выручки (без Инвесторов)" },

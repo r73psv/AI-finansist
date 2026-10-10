@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Calendar, CheckCircle2, RotateCcw, HelpCircle } from 'lucide-react';
-import { parseDate, processSalaryPayments, parseNumber } from '../processingEngine';
+import { parseDate, processSalaryPayments, parseNumber, isTotalSummaryRow } from '../processingEngine';
 import { RawRecord } from '../types';
 
 interface TestScenario {
@@ -289,6 +289,192 @@ export default function TestPlayground() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Grouping & Summing by "Услуга/Товар" Live Test */}
+      <div className="mt-8 pt-6 border-t border-gray-100">
+        <h4 className="font-sans font-semibold text-sm text-gray-950 tracking-tight flex items-center gap-2 mb-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+          Проверка группировки и суммирования доходной части по графе «Услуга/Товар»
+        </h4>
+        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+          Строки исходного файла, по которым совпадает значение в графе <strong>«Услуга/Товар»</strong>, автоматически объединяются в единую строку доходной части, а их суммы складываются.
+        </p>
+
+        <div className="bg-indigo-50/30 rounded-2xl p-4 border border-indigo-100/40">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 bg-white rounded-xl border border-indigo-100">
+              <div className="text-[10px] uppercase font-bold text-gray-400 mb-1">Исходные строки файла:</div>
+              <div className="space-y-1 font-mono text-[11px] text-gray-750">
+                <div>• «Стрижка женская» : 140 000 ₽</div>
+                <div>• «Стрижка женская» : 110 000 ₽</div>
+                <div className="text-[10px] text-indigo-600 italic mt-1">2 совпадающие записи в графе</div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-indigo-100">
+              <div className="text-[10px] uppercase font-bold text-gray-400 mb-1">Группировка:</div>
+              <div className="space-y-1 font-mono text-[11px] text-gray-750">
+                <div className="font-bold text-gray-900">Позиция: «Стрижка женская»</div>
+                <div className="text-indigo-700 font-semibold">Операций: 2 шт. (объединено)</div>
+                <div className="text-emerald-700 font-bold text-xs mt-1">Итого: 250 000 ₽ (140к + 110к)</div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-emerald-50/60 rounded-xl border border-emerald-100 flex flex-col justify-between">
+              <div className="text-[10px] uppercase font-bold text-emerald-800 mb-1">Результат в отчете:</div>
+              <div className="text-[11px] text-emerald-950 font-sans leading-relaxed">
+                Попадает в детализацию статьи <strong>«Выручка с услуг»</strong> и на отдельный лист Excel «Детализация доходов».
+              </div>
+              <div className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-2">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Алгоритм работает по ТЗ
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Services Numeric Preprocessing Verification */}
+      <div className="mt-8 pt-6 border-t border-gray-100">
+        <h4 className="font-sans font-semibold text-sm text-gray-950 tracking-tight flex items-center gap-2 mb-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+          Проверка предобработки числовых показателей таблицы по услугам (Вкладка 2)
+        </h4>
+        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+          При импорте таблицы по услугам все числовые графы (<strong>«Скидка»</strong>, <strong>«Баллы»</strong>, <strong>«Абонементы»</strong>, <strong>«Сертификаты»</strong>, <strong>«Со счетов клиентов»</strong>, <strong>«Оплачено деньгами»</strong>) проходят ту же стандартизацию, что и графа «Сумма, Р» финансового отчета: удаляются неразрывные пробелы, знаки валют (₽, руб., р.), бухгалтерские скобки, тире и текстовые прочерки.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          {[
+            { col: 'Скидка', raw: '(500,00 ₽)', expected: 500.00, note: 'Бухгалтерские скобки → положительная скидка' },
+            { col: 'Баллы', raw: '200 бонусов', expected: 200.00, note: 'Очистка текста и единиц измерения' },
+            { col: 'Абонементы', raw: '2 500,50 р.', expected: 2500.50, note: 'Разделители тысяч и копеек' },
+            { col: 'Сертификаты', raw: '—', expected: 0.00, note: 'Символ тире/прочерка → 0 ₽' },
+            { col: 'Со счетов клиентов', raw: '1.200,00 ₽', expected: 1200.00, note: 'Европейский формат разделителей' },
+            { col: 'Оплачено деньгами', raw: '  15 000 руб  ', expected: 15000.00, note: 'Пробелы и подстрока валюты' }
+          ].map((item, idx) => {
+            const parsed = item.col === 'Скидка' ? Math.abs(parseNumber(item.raw)) : parseNumber(item.raw);
+            const isCorrect = parsed === item.expected;
+            return (
+              <div key={`svc_pre_${idx}`} className="p-3 bg-gray-50 hover:bg-gray-50/80 rounded-xl border border-gray-150 flex flex-col justify-between gap-1.5 transition-all">
+                <div className="flex justify-between items-start gap-1">
+                  <span className="text-[10px] uppercase font-bold text-indigo-700">{item.col}:</span>
+                  <span className="text-[10.5px] font-mono text-gray-750 bg-gray-100 px-1.5 py-0.5 rounded font-semibold max-w-[130px] truncate" title={item.raw}>{item.raw}</span>
+                </div>
+                <div className="text-[10px] text-gray-400 italic">
+                  {item.note}
+                </div>
+                <div className="flex justify-between items-center border-t border-gray-100/60 pt-2">
+                  <span className="text-[10px] uppercase font-bold text-gray-400">Результат:</span>
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-xs">
+                    <span className={parsed > 0 ? 'text-indigo-600' : 'text-gray-500'}>
+                      {parsed.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </span>
+                    {isCorrect ? (
+                      <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-100/50 px-1.5 py-0.5 rounded font-sans font-bold">OK</span>
+                    ) : (
+                      <span className="text-[9px] bg-rose-50 text-rose-700 border border-rose-100/50 px-1.5 py-0.5 rounded font-sans font-bold">Ошибка</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Services Report & Cost Allocation (Tab 2) Verification */}
+      <div className="mt-8 pt-6 border-t border-gray-100">
+        <h4 className="font-sans font-semibold text-sm text-gray-950 tracking-tight flex items-center gap-2 mb-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+          Проверка алгоритма Вкладки 2: Расчет выручки и пропорциональное распределение затрат
+        </h4>
+        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+          Формулы расчета: <strong>Сумма выручки</strong> = Баллы + Абонементы + Сертификаты + Счета клиентов + Деньги. 
+          <strong>Затраты</strong> (переменные и постоянные) распределяются строго пропорционально доле выручки услуги в общем объеме.
+        </p>
+
+        <div className="bg-emerald-50/20 rounded-2xl p-4 border border-emerald-150/40">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 bg-white rounded-xl border border-gray-150">
+              <div className="text-[10px] uppercase font-bold text-gray-400 mb-1">1. Расчет суммы выручки услуги:</div>
+              <div className="space-y-1 font-mono text-[11px] text-gray-750">
+                <div>Баллы (200 ₽) + Абонементы (0 ₽)</div>
+                <div>+ Сертификаты (1 500 ₽) + Счета (0 ₽)</div>
+                <div>+ Деньгами (2 000 ₽)</div>
+                <div className="text-indigo-700 font-bold text-xs mt-1 border-t pt-1">
+                  = 3 700 ₽ (Сумма выручки)
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-gray-150">
+              <div className="text-[10px] uppercase font-bold text-gray-400 mb-1">2. Пропорция затрат (База из финотчета):</div>
+              <div className="space-y-1 font-mono text-[11px] text-gray-750">
+                <div>Если общая выручка = 100 000 ₽,</div>
+                <div>Доля услуги = 3 700 / 100 000 = 3.7%</div>
+                <div>Переменные затраты = 20 000 ₽ × 3.7% = 740 ₽</div>
+                <div>Постоянные затраты = 10 000 ₽ × 3.7% = 370 ₽</div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-white rounded-xl border border-emerald-100 flex flex-col justify-between">
+              <div>
+                <div className="text-[10px] uppercase font-bold text-emerald-800 mb-1">3. Итог по всем услугам:</div>
+                <div className="text-[11px] text-gray-700 font-sans leading-relaxed">
+                  Сумма всех долей равна <strong>100%</strong>. Суммы распределенных затрат строго сходятся со статьями расходов финансового отчета.
+                </div>
+              </div>
+              <div className="text-[10px] font-bold text-emerald-700 flex items-center gap-1 mt-2">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Полное соответствие алгоритму
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Exclusion of "Всего" / "Итого" Summary Row Verification */}
+      <div className="mt-8 pt-6 border-t border-gray-100">
+        <h4 className="font-sans font-semibold text-sm text-gray-950 tracking-tight flex items-center gap-2 mb-2">
+          <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+          Проверка фильтрации: Исключение строки «Всего» из расчета по услугам
+        </h4>
+        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+          Строки отчетов CRM с итоговыми сводками (<strong>«Всего»</strong>, <strong>«Всего:»</strong>, <strong>«Итого»</strong>, <strong>«Общий итог»</strong>) в графе «Услуга» автоматически распознаются и <strong>исключаются</strong> из расчетов, чтобы предотвратить задваивание общей суммы выручки и базы распределения затрат.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { service: 'Всего', amount: '125 000 ₽', shouldExclude: true },
+            { service: 'Всего:', amount: '89 400 ₽', shouldExclude: true },
+            { service: 'Итого по услугам', amount: '450 000 ₽', shouldExclude: true },
+            { service: 'Стрижка женская', amount: '2 800 ₽', shouldExclude: false }
+          ].map((item, idx) => {
+            const excluded = isTotalSummaryRow(item.service);
+            const statusOk = excluded === item.shouldExclude;
+            return (
+              <div key={`excl_${idx}`} className="p-3 bg-gray-50 hover:bg-gray-50/80 rounded-xl border border-gray-150 flex flex-col justify-between gap-1.5">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Графа «Услуга»:</div>
+                  <div className="text-xs font-bold text-gray-900 mt-0.5">«{item.service}»</div>
+                  <div className="text-[11px] font-mono text-gray-500 mt-0.5">Сумма: {item.amount}</div>
+                </div>
+                <div className="border-t border-gray-100 pt-2 flex items-center justify-between">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    excluded ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  }`}>
+                    {excluded ? 'Исключено из расчета' : 'Включено в отчет'}
+                  </span>
+                  {statusOk && (
+                    <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> OK
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

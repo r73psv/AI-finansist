@@ -23,11 +23,32 @@ import {
   Play,
   Loader2,
   Check,
-  ChevronDown
+  ChevronDown,
+  Layers,
+  Package,
+  Eye,
+  EyeOff,
+  Scissors,
+  Calculator,
+  PieChart,
+  Percent,
+  BarChart3,
+  SlidersHorizontal,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
-import { RawRecord, MetricRow, SalaryEmployee, SalaryProcessingMetrics } from './types';
+import { 
+  RawRecord, 
+  MetricRow, 
+  SalaryEmployee, 
+  SalaryProcessingMetrics, 
+  RevenueItemDetail,
+  RawServiceRecord,
+  ServiceReportItem,
+  ServicesReportSummary,
+  ServicesPreprocessingStats
+} from './types';
 import { 
   parseUploadedSpreadsheet, 
   generateFinancialReport, 
@@ -35,7 +56,12 @@ import {
   calculateReportFormulas,
   downloadFinancialSpreadsheet,
   downloadSalarySpreadsheet,
-  parseDate
+  downloadRevenueSpreadsheet,
+  groupRevenueByServiceProduct,
+  parseDate,
+  parseServicesSpreadsheet,
+  generateServicesReport,
+  downloadServicesSpreadsheet
 } from './processingEngine';
 import { FINANCIAL_TEMPLATE } from './financialTemplate';
 import TestPlayground from './components/TestPlayground';
@@ -43,11 +69,14 @@ import { downloadDocxReport } from './docxGenerator';
 
 // Realistic mock data so users can test the dashboard instantly without preparing files.
 const DEMO_RECORDS: Omit<RawRecord, 'id' | 'date'>[] = [
-  // Revenue
-  { sum: 250000, category: 'Выручка с услуг', counterparty: 'Клиенты салона', comment: 'Выручка услуги за май', dateStr: '15.05.2026', rawIndex: 2 },
-  { sum: 120000, category: 'Выручка с товаров', counterparty: 'Розничные покупатели', comment: 'Продажа косметики витрина', dateStr: '18.05.2026', rawIndex: 3 },
-  { sum: 30000, category: 'Пополнение счёта', counterparty: 'Абоненты', comment: 'Депозиты на баланс', dateStr: '20.05.2026', rawIndex: 4 },
-  { sum: 45000, category: 'Выручка с сертификатов', counterparty: 'Подарочные продажи', comment: 'Сертификаты подарочные', dateStr: '22.05.2026', rawIndex: 5 },
+  // Revenue with "Услуга/Товар" detailing (matching rows grouped & summed)
+  { sum: 140000, category: 'Выручка с услуг', counterparty: 'Клиенты салона', serviceProduct: 'Стрижка женская (модельная)', comment: 'Стрижки май 1 смена', dateStr: '10.05.2026', rawIndex: 2 },
+  { sum: 110000, category: 'Выручка с услуг', counterparty: 'Клиенты салона', serviceProduct: 'Стрижка женская (модельная)', comment: 'Стрижки май 2 смена', dateStr: '14.05.2026', rawIndex: 3 },
+  { sum: 90000, category: 'Выручка с услуг', counterparty: 'Клиенты салона', serviceProduct: 'Сложное окрашивание (Airtouch)', comment: 'Окрашивание волос сложные техники', dateStr: '15.05.2026', rawIndex: 4 },
+  { sum: 65000, category: 'Выручка с товаров', counterparty: 'Розничные покупатели', serviceProduct: 'Шампунь Kerastase Nutritive 250ml', comment: 'Продажа косметики витрина', dateStr: '18.05.2026', rawIndex: 5 },
+  { sum: 55000, category: 'Выручка с товаров', counterparty: 'Розничные покупатели', serviceProduct: 'Шампунь Kerastase Nutritive 250ml', comment: 'Продажа косметики витрина', dateStr: '19.05.2026', rawIndex: 6 },
+  { sum: 30000, category: 'Пополнение счёта', counterparty: 'Абоненты', serviceProduct: 'Пополнение депозитного баланса', comment: 'Депозиты на баланс', dateStr: '20.05.2026', rawIndex: 7 },
+  { sum: 45000, category: 'Выручка с сертификатов', counterparty: 'Подарочные продажи', serviceProduct: 'Подарочный сертификат 5000 ₽', comment: 'Сертификаты подарочные', dateStr: '22.05.2026', rawIndex: 8 },
   // Operating Variable Expenses
   { sum: 15400, category: '2026 Жизнеобеспечение салона', counterparty: 'Пекарня Сласть', comment: 'Вкусняшки для утренней смены', dateStr: '02.05.2026', rawIndex: 6 },
   { sum: 3400, category: 'Доставка', counterparty: 'Яндекс Доставка', comment: 'Доставка одноразовых простыней', dateStr: '05.05.2026', rawIndex: 7 },
@@ -72,8 +101,30 @@ const DEMO_RECORDS: Omit<RawRecord, 'id' | 'date'>[] = [
   { sum: 14200, category: 'Непредвиденный форс-мажор ураган', counterparty: 'ООО РемСтройВолга', comment: 'Срочный ремонт козырька входа', dateStr: '16.05.2026', rawIndex: 22 }
 ];
 
+// Realistic mock services data for instant testing of Tab 2
+const DEMO_SERVICES_RECORDS: Omit<RawServiceRecord, 'id' | 'revenue'>[] = [
+  { rawIndex: 2, service: 'Стрижка женская (модельная)', discount: 500, points: 200, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 2800 },
+  { rawIndex: 3, service: 'Стрижка женская (модельная)', discount: 0, points: 0, subscriptions: 0, certificates: 1500, clientAccounts: 0, money: 2000 },
+  { rawIndex: 4, service: 'Стрижка женская (модельная)', discount: 300, points: 100, subscriptions: 0, certificates: 0, clientAccounts: 1200, money: 1900 },
+  { rawIndex: 5, service: 'Сложное окрашивание (Airtouch)', discount: 1500, points: 500, subscriptions: 0, certificates: 3000, clientAccounts: 2000, money: 8500 },
+  { rawIndex: 6, service: 'Сложное окрашивание (Airtouch)', discount: 0, points: 0, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 15000 },
+  { rawIndex: 7, service: 'Маникюр аппаратный с покрытием гель-лак', discount: 200, points: 150, subscriptions: 2000, certificates: 0, clientAccounts: 0, money: 350 },
+  { rawIndex: 8, service: 'Маникюр аппаратный с покрытием гель-лак', discount: 0, points: 0, subscriptions: 0, certificates: 1000, clientAccounts: 500, money: 1000 },
+  { rawIndex: 9, service: 'Маникюр аппаратный с покрытием гель-лак', discount: 400, points: 200, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1900 },
+  { rawIndex: 10, service: 'Педикюр Smart классический', discount: 0, points: 100, subscriptions: 0, certificates: 0, clientAccounts: 1000, money: 2100 },
+  { rawIndex: 11, service: 'Педикюр Smart классический', discount: 300, points: 0, subscriptions: 2500, certificates: 0, clientAccounts: 0, money: 400 },
+  { rawIndex: 12, service: 'Уход для волос глубокое восстановление Kerastase', discount: 500, points: 300, subscriptions: 0, certificates: 2000, clientAccounts: 0, money: 2700 },
+  { rawIndex: 13, service: 'Стрижка мужская Fade / Кроп', discount: 0, points: 100, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1900 },
+  { rawIndex: 14, service: 'Стрижка мужская Fade / Кроп', discount: 200, points: 0, subscriptions: 0, certificates: 0, clientAccounts: 500, money: 1300 },
+  { rawIndex: 15, service: 'Окрашивание корней Matrix', discount: 0, points: 250, subscriptions: 0, certificates: 1500, clientAccounts: 0, money: 3250 },
+  { rawIndex: 16, service: 'Архитектура и коррекция бровей', discount: 100, points: 50, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1050 }
+];
+
 export default function App() {
-  // Application State
+  // Primary top-level navigation: Tab 1 (Финансовый отчет) vs Tab 2 (Отчет по услугам)
+  const [primaryTab, setPrimaryTab] = useState<'finance' | 'services'>('finance');
+
+  // Application State - Tab 1 (Finance)
   const [cutoffDateStr, setCutoffDateStr] = useState('20.05.2026'); // June 2026 is current. June starts on 1st. Let's make cutoff May 20th, 2026
   const [fileName, setFileName] = useState<string | null>(null);
   const [rawRecords, setRawRecords] = useState<RawRecord[]>([]);
@@ -85,12 +136,28 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [tableFilter, setTableFilter] = useState<'all' | 'data' | 'formulas' | 'nonzero'>('all');
-  const [activeTab, setActiveTab] = useState<'financial' | 'salary' | 'raw' | 'faq'>('financial');
+  const [activeTab, setActiveTab] = useState<'financial' | 'salary' | 'revenue-details' | 'raw' | 'faq'>('financial');
+  const [showRevenueDetailInline, setShowRevenueDetailInline] = useState(true);
+  const [revenueSearch, setRevenueSearch] = useState('');
+  const [revenueCategoryFilter, setRevenueCategoryFilter] = useState<'all' | 'services' | 'goods' | 'other'>('all');
+  const [expandedRevenueItems, setExpandedRevenueItems] = useState<Record<string, boolean>>({});
   const [editingRowIdx, setEditingRowIdx] = useState<number | null>(null);
   const [editingRowValue, setEditingRowValue] = useState<string>('');
   const [expandedExtraRows, setExpandedExtraRows] = useState<Record<number, boolean>>({});
   const [expandedReportRows, setExpandedReportRows] = useState<Record<number, boolean>>({});
   const [notification, setNotification] = useState<{ status: 'success' | 'error', message: string } | null>(null);
+
+  // Application State - Tab 2 (Services Report)
+  const [servicesRecords, setServicesRecords] = useState<RawServiceRecord[]>([]);
+  const [servicesFileName, setServicesFileName] = useState<string | null>(null);
+  const [servicesSearchQuery, setServicesSearchQuery] = useState('');
+  const [servicesDragActive, setServicesDragActive] = useState(false);
+  const [expandedServiceItems, setExpandedServiceItems] = useState<Record<string, boolean>>({});
+  const [customVariableExpenses, setCustomVariableExpenses] = useState<string>('');
+  const [customFixedExpenses, setCustomFixedExpenses] = useState<string>('');
+  const [isServicesCustomExpensesActive, setIsServicesCustomExpensesActive] = useState(false);
+  const [servicesStats, setServicesStats] = useState<ServicesPreprocessingStats | null>(null);
+  const servicesFileInputRef = useRef<HTMLInputElement>(null);
 
   // Staging and processing states
   const [stagedRecords, setStagedRecords] = useState<RawRecord[]>([]);
@@ -184,12 +251,12 @@ export default function App() {
     // Automatically trigger downloads for both reports
     try {
       const financialResults = generateFinancialReport(finalRecords, newOverrides, categoryMappings, transactionMappings, finalName);
-      const { report: financialReport, extraRows } = financialResults;
+      const { report: financialReport, extraRows, revenueDetails } = financialResults;
       const salaryResults = processSalaryPayments(finalRecords, parsedCutoffDate);
       const { employees: salaryEmployees } = salaryResults;
 
       // 1. Download Financial Spreadsheet
-      downloadFinancialSpreadsheet(financialReport, extraRows);
+      downloadFinancialSpreadsheet(financialReport, extraRows, revenueDetails);
       
       // 2. Download Salary Spreadsheet with 500ms delay to avoid browser blocking multiple downloads
       setTimeout(() => {
@@ -306,7 +373,54 @@ export default function App() {
     return generateFinancialReport(rawRecords, userOverrides, categoryMappings, transactionMappings, fileName);
   }, [rawRecords, userOverrides, categoryMappings, transactionMappings, fileName]);
 
-  const { report: financialReport, extraRows } = financialResults;
+  const { report: financialReport, extraRows, revenueDetails } = financialResults;
+
+  // Filtered revenue details for the dedicated revenue tab
+  const filteredRevenueDetails = useMemo(() => {
+    if (!revenueDetails) return [];
+    return revenueDetails.filter((item) => {
+      const matchesSearch = !revenueSearch || 
+        item.name.toLowerCase().includes(revenueSearch.toLowerCase()) ||
+        item.category.toLowerCase().includes(revenueSearch.toLowerCase());
+      
+      let matchesCat = true;
+      if (revenueCategoryFilter === 'services') {
+        matchesCat = item.category.toLowerCase().includes('услуг');
+      } else if (revenueCategoryFilter === 'goods') {
+        matchesCat = item.category.toLowerCase().includes('товар');
+      } else if (revenueCategoryFilter === 'other') {
+        matchesCat = !item.category.toLowerCase().includes('услуг') && !item.category.toLowerCase().includes('товар');
+      }
+
+      return matchesSearch && matchesCat;
+    });
+  }, [revenueDetails, revenueSearch, revenueCategoryFilter]);
+
+  // Aggregate stats for revenue detailing
+  const revenueStats = useMemo(() => {
+    if (!revenueDetails || revenueDetails.length === 0) {
+      return { totalSum: 0, totalCount: 0, servicesSum: 0, goodsSum: 0 };
+    }
+    let totalSum = 0;
+    let totalCount = 0;
+    let servicesSum = 0;
+    let goodsSum = 0;
+    revenueDetails.forEach(item => {
+      totalSum += item.sum;
+      totalCount += item.count;
+      if (item.category.toLowerCase().includes('услуг')) {
+        servicesSum += item.sum;
+      } else if (item.category.toLowerCase().includes('товар')) {
+        goodsSum += item.sum;
+      }
+    });
+    return {
+      totalSum,
+      totalCount,
+      servicesSum,
+      goodsSum
+    };
+  }, [revenueDetails]);
 
   // Processing results: Salary Payments
   const salaryResults = useMemo(() => {
@@ -387,12 +501,151 @@ export default function App() {
     });
   }, [financialReport, searchQuery, tableFilter]);
 
+  // -------------------------------------------------------------
+  // TAB 2 (SERVICES REPORT) LOGIC & COST ALLOCATION
+  // -------------------------------------------------------------
+  // Variable and Fixed expenses extracted from Financial Report (Tab 1)
+  const variableExpensesFromReport = useMemo(() => {
+    const row = financialReport.find(r => r.label === "Расходы переменные");
+    return row ? Math.abs(row.value) : 0;
+  }, [financialReport]);
+
+  const fixedExpensesFromReport = useMemo(() => {
+    const row = financialReport.find(r => r.label === "Расходы постоянные");
+    return row ? Math.abs(row.value) : 0;
+  }, [financialReport]);
+
+  const activeVariableExpenses = useMemo(() => {
+    if (isServicesCustomExpensesActive && customVariableExpenses !== '') {
+      return parseFloat(customVariableExpenses) || 0;
+    }
+    return variableExpensesFromReport;
+  }, [isServicesCustomExpensesActive, customVariableExpenses, variableExpensesFromReport]);
+
+  const activeFixedExpenses = useMemo(() => {
+    if (isServicesCustomExpensesActive && customFixedExpenses !== '') {
+      return parseFloat(customFixedExpenses) || 0;
+    }
+    return fixedExpensesFromReport;
+  }, [isServicesCustomExpensesActive, customFixedExpenses, fixedExpensesFromReport]);
+
+  // Main Services Report Generation
+  const servicesReport = useMemo(() => {
+    return generateServicesReport(servicesRecords, activeVariableExpenses, activeFixedExpenses);
+  }, [servicesRecords, activeVariableExpenses, activeFixedExpenses]);
+
+  // Filtered Services List for Search
+  const filteredServiceItems = useMemo(() => {
+    if (!servicesSearchQuery.trim()) return servicesReport.items;
+    const q = servicesSearchQuery.toLowerCase().trim();
+    return servicesReport.items.filter(item => item.service.toLowerCase().includes(q));
+  }, [servicesReport.items, servicesSearchQuery]);
+
+  // Handle uploaded services file with numeric preprocessing
+  const processServicesFile = (selectedFile: File) => {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const rawData = evt.target?.result;
+        if (!rawData) throw new Error('Не удалось прочитать файл');
+        const dataArray = new Uint8Array(rawData as ArrayBuffer);
+        const workbook = XLSX.read(dataArray, { type: 'array', cellDates: true });
+        const { records, errors, stats } = parseServicesSpreadsheet(workbook);
+
+        if (errors.length > 0) {
+          setNotification({ status: 'error', message: errors.join(' ') });
+          return;
+        }
+
+        setServicesRecords(records);
+        setServicesFileName(selectedFile.name);
+        setServicesStats(stats);
+        setNotification({
+          status: 'success',
+          message: `Файл по услугам «${selectedFile.name}» (${records.length} строк) успешно загружен! Выполнена предобработка числовых показателей: очищено и нормализовано ${stats.cleanedFieldsCount} значений (валюты, пробелы, скобки, разделители). Выручка рассчитана.`
+        });
+      } catch (err: any) {
+        setNotification({
+          status: 'error',
+          message: `Ошибка чтения файла по услугам: ${err.message || 'неподдерживаемый формат'}`
+        });
+      }
+    };
+    reader.readAsArrayBuffer(selectedFile);
+  };
+
+  const handleServicesFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+    processServicesFile(selectedFile);
+  };
+
+  const handleServicesDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setServicesDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const selectedFile = e.dataTransfer.files[0];
+      const ext = selectedFile.name.split('.').pop()?.toLowerCase();
+      if (ext !== 'xlsx' && ext !== 'xls' && ext !== 'csv') {
+        setNotification({
+          status: 'error',
+          message: 'Недопустимый формат файла. Пожалуйста, загрузите файл .xlsx, .xls или .csv'
+        });
+        return;
+      }
+      processServicesFile(selectedFile);
+    }
+  };
+
+  const loadDemoServicesData = () => {
+    const structured: RawServiceRecord[] = DEMO_SERVICES_RECORDS.map((dem, idx) => {
+      const rev = dem.points + dem.subscriptions + dem.certificates + dem.clientAccounts + dem.money;
+      return {
+        ...dem,
+        id: `demo_svc_${idx}_${Date.now()}`,
+        revenue: parseFloat(rev.toFixed(2))
+      };
+    });
+    setServicesRecords(structured);
+    setServicesFileName('Услуги_салона_(25.01.2026_-_31.01.2026).xlsx');
+    setServicesStats({
+      totalRows: DEMO_SERVICES_RECORDS.length,
+      validServiceRows: DEMO_SERVICES_RECORDS.length,
+      cleanedFieldsCount: DEMO_SERVICES_RECORDS.length * 6,
+      recognizedColumns: {
+        service: 'Услуга',
+        discount: 'Скидка',
+        points: 'Баллы',
+        subscriptions: 'Абонементы',
+        certificates: 'Сертификаты',
+        clientAccounts: 'Оплачено со счетов клиентов, ₽',
+        money: 'Оплачено деньгами, ₽'
+      }
+    });
+    if (rawRecords.length === 0) {
+      loadDemoData();
+    }
+    setNotification({
+      status: 'success',
+      message: 'Демо-данные по услугам успешно загружены! Предобработка числовых показателей выполнена, затраты распределены пропорционально выручке.'
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gray-50/70 pb-20 font-sans">
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileUpload}
+        accept=".xlsx,.xls,.csv"
+        className="hidden"
+      />
+      <input
+        type="file"
+        ref={servicesFileInputRef}
+        onChange={handleServicesFileUpload}
         accept=".xlsx,.xls,.csv"
         className="hidden"
       />
@@ -509,8 +762,62 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* If no file uploaded, show Upload Prompt Jumbotron */}
-        {!isProcessed ? (
+        {/* Primary Tabs Switcher: Вкладка 1 (Финансовый отчет) | Вкладка 2 (Отчет по услугам) */}
+        <div className="bg-white p-2 rounded-2xl border border-gray-200/80 shadow-xs mb-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPrimaryTab('finance')}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                primaryTab === 'finance'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-150'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <Table className="w-4 h-4" />
+              <span>Вкладка 1: Финансовый отчет</span>
+              {isProcessed && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400" title="Данные обработаны"></span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setPrimaryTab('services')}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                primaryTab === 'services'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-150'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <Scissors className="w-4 h-4" />
+              <span>Вкладка 2: Отчет по услугам</span>
+              {servicesRecords.length > 0 ? (
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  primaryTab === 'services' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700 border border-indigo-150'
+                }`}>
+                  {servicesReport.items.length} услуг
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-150">
+                  Загрузить файл
+                </span>
+              )}
+            </button>
+          </div>
+
+          <div className="text-[11px] text-gray-500 flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-xl self-end sm:self-auto border border-gray-100">
+            {primaryTab === 'finance' ? (
+              <span>Основной финансовый отчет, зарплаты и детализация</span>
+            ) : (
+              <span>Группировка услуг, расчет выручки и распределение затрат</span>
+            )}
+          </div>
+        </div>
+
+        {/* TAB 1: ФИНАНСОВЫЙ ОТЧЕТ */}
+        {primaryTab === 'finance' && (
+          <div>
+            {/* If no file uploaded, show Upload Prompt Jumbotron */}
+            {!isProcessed ? (
           <div>
             {isProcessing ? (
               /* Premium Step-by-Step Processing Loader */
@@ -938,7 +1245,7 @@ export default function App() {
             {/* Download and Tabs control block */}
             <div className="bg-white rounded-2xl border border-gray-150 p-4 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
               {/* Tab selector */}
-              <div className="flex bg-gray-50 p-1.5 rounded-xl border border-gray-100 w-full md:w-auto">
+              <div className="flex bg-gray-50 p-1.5 rounded-xl border border-gray-100 w-full md:w-auto overflow-x-auto">
                 <button
                   onClick={() => setActiveTab('financial')}
                   className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
@@ -949,6 +1256,22 @@ export default function App() {
                 >
                   <Table className="w-4 h-4" />
                   Финансовый отчет
+                </button>
+                <button
+                  onClick={() => setActiveTab('revenue-details')}
+                  className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                    activeTab === 'revenue-details' 
+                      ? 'bg-white text-indigo-700 shadow-sm' 
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <TrendingUp className="w-4 h-4" />
+                  <span>Детализация доходов</span>
+                  {revenueDetails && revenueDetails.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-100 text-indigo-800 font-bold">
+                      {revenueDetails.length}
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setActiveTab('salary')}
@@ -972,6 +1295,14 @@ export default function App() {
                   <FileText className="w-4 h-4" />
                   Исходная таблица
                 </button>
+                <button
+                  onClick={() => setPrimaryTab('services')}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 border border-indigo-150 ml-1"
+                  title="Перейти во 2-ю вкладку: Отчет по услугам с распределением затрат"
+                >
+                  <Scissors className="w-3.5 h-3.5" />
+                  <span>Вкладка 2: Отчет по услугам →</span>
+                </button>
               </div>
 
               {/* Downloads Actions */}
@@ -985,12 +1316,20 @@ export default function App() {
                   <span>Рассчитать новый отчет</span>
                 </button>
                 <button
-                  onClick={() => downloadFinancialSpreadsheet(financialReport, extraRows)}
+                  onClick={() => downloadFinancialSpreadsheet(financialReport, extraRows, revenueDetails)}
                   className="flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2 bg-indigo-50 border border-indigo-150 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold transition-all cursor-pointer"
-                  title="Скачать полный финансовый отчет"
+                  title="Скачать полный финансовый отчет со сводным и подробным листом"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Метрики (XLSX)
+                </button>
+                <button
+                  onClick={() => downloadRevenueSpreadsheet(revenueDetails, totalRevenue)}
+                  className="flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 hover:bg-amber-100 text-amber-800 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                  title="Скачать отдельную ведомость по графе Услуга/Товар"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Услуги/Товары (XLSX)
                 </button>
                 <button
                   onClick={() => downloadSalarySpreadsheet(salaryEmployees)}
@@ -1001,9 +1340,9 @@ export default function App() {
                   Зарплатная ведомость (XLSX)
                 </button>
                 <button
-                  onClick={() => downloadDocxReport(financialReport, rawRecords, categoryMappings)}
+                  onClick={() => downloadDocxReport(financialReport, rawRecords, categoryMappings, revenueDetails)}
                   className="flex-1 md:flex-initial flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer"
-                  title="Скачать финансовый отчет в формате .docx"
+                  title="Скачать финансовый отчет в формате .docx с детализацией доходов"
                 >
                   <FileText className="w-3.5 h-3.5" />
                   Отчет-ведомость (DOCX)
@@ -1052,20 +1391,35 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Dropdown filters */}
-                  <div className="flex group items-center gap-2 bg-gray-50 px-3.5 py-1.5 rounded-xl border border-gray-150 w-full sm:w-auto">
-                    <Filter className="w-4 h-4 text-gray-400" />
-                    <span className="text-xs text-gray-500 font-medium whitespace-nowrap">Показывать:</span>
-                    <select
-                      value={tableFilter}
-                      onChange={(e) => setTableFilter(e.target.value as any)}
-                      className="bg-transparent border-none text-xs text-gray-700 outline-none pr-6 focus:ring-0 font-medium cursor-pointer"
+                  {/* Toggle and Dropdown filters */}
+                  <div className="flex items-center gap-3 w-full sm:w-auto flex-wrap">
+                    <button
+                      onClick={() => setShowRevenueDetailInline(!showRevenueDetailInline)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                        showRevenueDetailInline
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm'
+                          : 'bg-gray-50 border-gray-150 text-gray-500 hover:text-gray-700'
+                      }`}
+                      title="Показывать детализацию по графе Услуга/Товар прямо в строках отчета"
                     >
-                      <option value="all">Все 139 строк</option>
-                      <option value="data">Только вводимые статьи</option>
-                      <option value="formulas">Только формулы</option>
-                      <option value="nonzero">Только ненулевые</option>
-                    </select>
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Детализация по «Услуга/Товар»: {showRevenueDetailInline ? 'Вкл' : 'Выкл'}</span>
+                    </button>
+
+                    <div className="flex group items-center gap-2 bg-gray-50 px-3.5 py-1.5 rounded-xl border border-gray-150">
+                      <Filter className="w-4 h-4 text-gray-400" />
+                      <span className="text-xs text-gray-500 font-medium whitespace-nowrap">Показывать:</span>
+                      <select
+                        value={tableFilter}
+                        onChange={(e) => setTableFilter(e.target.value as any)}
+                        className="bg-transparent border-none text-xs text-gray-700 outline-none pr-6 focus:ring-0 font-medium cursor-pointer"
+                      >
+                        <option value="all">Все строки</option>
+                        <option value="data">Только вводимые статьи</option>
+                        <option value="formulas">Только формулы</option>
+                        <option value="nonzero">Только ненулевые</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 
@@ -1104,7 +1458,7 @@ export default function App() {
                               <tr 
                                 className={`transition-colors h-11 ${bgStyle}`}
                                 onClick={() => {
-                                  if (isDataRow) {
+                                  if (isDataRow || (row.revenueDetails && row.revenueDetails.length > 0)) {
                                     setExpandedReportRows(prev => ({ ...prev, [row.index]: !prev[row.index] }));
                                   }
                                 }}
@@ -1114,7 +1468,7 @@ export default function App() {
                                 </td>
                                 <td className="p-3 pl-4 font-sans font-medium text-gray-800">
                                   <div className="flex items-center gap-2">
-                                    {isDataRow && (
+                                    {(isDataRow || (row.revenueDetails && row.revenueDetails.length > 0)) && (
                                       <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
                                     )}
                                     <span className={isHeaderSection ? "uppercase tracking-wide text-indigo-950 font-bold text-[11px]" : isFormula ? "text-indigo-900 font-semibold" : "text-gray-750 font-semibold"}>
@@ -1214,19 +1568,92 @@ export default function App() {
                                   </div>
                                 </td>
                               </tr>
-                              {isExpanded && isDataRow && (
+                              {showRevenueDetailInline && row.revenueDetails && row.revenueDetails.length > 0 && row.index >= 1 && row.index <= 7 && (
+                                row.revenueDetails.map((detail, dIdx) => (
+                                  <tr 
+                                    key={`rev_inline_${row.index}_${dIdx}`}
+                                    className="bg-indigo-50/15 hover:bg-indigo-50/35 transition-colors border-l-4 border-l-indigo-400 h-9"
+                                  >
+                                    <td className="p-2 text-center font-mono text-[10px] text-indigo-400 border-r border-gray-50">
+                                      ↳
+                                    </td>
+                                    <td className="p-2 pl-8 font-sans text-gray-800">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-gray-400 font-mono text-xs">↳</span>
+                                        <span className="font-medium text-gray-850 text-[11.5px]">{detail.name}</span>
+                                        <span className="text-[10px] bg-indigo-50 text-indigo-700 font-mono px-1.5 py-0.2 rounded border border-indigo-100/60" title="Количество сгруппированных строк">
+                                          {detail.count} оп.
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="p-2">
+                                      <span className="px-1.5 py-0.5 rounded text-[8.5px] uppercase font-bold bg-indigo-50/80 text-indigo-650 border border-indigo-100/50">
+                                        Услуга/Товар
+                                      </span>
+                                    </td>
+                                    <td className="p-2 text-right pr-6 font-mono font-bold text-gray-850 text-[12px]">
+                                      {detail.sum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                              {isExpanded && (isDataRow || (row.revenueDetails && row.revenueDetails.length > 0)) && (
                                 <tr className="bg-indigo-50-[0.02]">
                                   <td colSpan={4} className="p-4 pl-12 bg-indigo-50/20 border-b border-gray-100">
+                                    {/* Grouped Revenue Detailing Card if present */}
+                                    {row.revenueDetails && row.revenueDetails.length > 0 && (
+                                      <div className="mb-4 bg-white p-3.5 rounded-xl border border-indigo-150 shadow-sm">
+                                        <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                                          <div className="text-[11px] font-bold text-indigo-950 flex items-center gap-1.5">
+                                            <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                                            <span>Детализация по графе «Услуга/Товар» (совпадающие строки сгруппированы и просуммированы):</span>
+                                          </div>
+                                          <span className="text-[10px] bg-indigo-50 text-indigo-700 font-mono font-semibold px-2 py-0.5 rounded border border-indigo-100">
+                                            {row.revenueDetails.length} уникальных позиций
+                                          </span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-left text-[11px] divide-y divide-gray-100">
+                                            <thead>
+                                              <tr className="bg-indigo-50/30 text-indigo-900 font-bold text-[9px] uppercase select-none">
+                                                <th className="p-2 pl-3">№</th>
+                                                <th className="p-2">Наименование услуги/товара</th>
+                                                <th className="p-2 text-center">Кол-во операций</th>
+                                                <th className="p-2 text-center">Доля в статье</th>
+                                                <th className="p-2 text-right pr-3">Итоговая сумма</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-50">
+                                              {row.revenueDetails.map((item, itIdx) => (
+                                                <tr key={itIdx} className="hover:bg-gray-50/60">
+                                                  <td className="p-2 pl-3 text-gray-400 font-mono">{itIdx + 1}</td>
+                                                  <td className="p-2 font-medium text-gray-800">{item.name}</td>
+                                                  <td className="p-2 text-center font-mono font-semibold text-indigo-700">{item.count}</td>
+                                                  <td className="p-2 text-center font-mono text-gray-500">
+                                                    {row.value > 0 ? `${((item.sum / row.value) * 100).toFixed(1)}%` : '—'}
+                                                  </td>
+                                                  <td className="p-2 text-right pr-3 font-mono font-bold text-gray-900">
+                                                    {item.sum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
+
                                     {hasTransactions ? (
                                       <div className="overflow-x-auto rounded-xl border border-gray-200/60 shadow-sm bg-white">
                                         <table className="min-w-full divide-y divide-gray-150 text-left text-[11px]">
                                           <thead className="bg-indigo-50/50 font-semibold text-indigo-950 uppercase tracking-wider text-[9px] select-none">
                                             <tr>
-                                              <th className="p-2.5 pl-4 w-28">Дата</th>
-                                              <th className="p-2.5 w-48">Контрагент</th>
-                                              <th className="p-2.5 font-bold text-indigo-950">Назначение</th>
+                                              <th className="p-2.5 pl-4 w-24">Дата</th>
+                                              <th className="p-2.5 w-40">Контрагент</th>
+                                              <th className="p-2.5 w-44 font-bold text-indigo-950">Услуга/Товар</th>
+                                              <th className="p-2.5">Назначение</th>
                                               <th className="p-2.5">Комментарий</th>
-                                              <th className="p-2.5 text-right pr-4 w-36">Сумма</th>
+                                              <th className="p-2.5 text-right pr-4 w-32">Сумма</th>
                                             </tr>
                                           </thead>
                                           <tbody className="divide-y divide-gray-100 font-sans text-gray-650">
@@ -1238,10 +1665,13 @@ export default function App() {
                                                 <td className="p-2.5 font-medium text-gray-800">
                                                    {t.counterparty || <span className="text-gray-400 italic">Не указан</span>}
                                                  </td>
-                                                 <td className="p-2.5 text-gray-700 max-w-[240px] truncate" title={t.category}>
-                                                   {t.category || <span className="text-gray-300">—</span>}
-                                                 </td>
-                                                 <td className="p-2.5 text-gray-500 max-w-[240px] truncate" title={t.comment}>
+                                                <td className="p-2.5 font-medium text-indigo-950 max-w-[200px] truncate" title={t.serviceProduct}>
+                                                  {t.serviceProduct || <span className="text-gray-300">—</span>}
+                                                </td>
+                                                <td className="p-2.5 text-gray-700 max-w-[200px] truncate" title={t.category}>
+                                                  {t.category || <span className="text-gray-300">—</span>}
+                                                </td>
+                                                <td className="p-2.5 text-gray-500 max-w-[200px] truncate" title={t.comment}>
                                                   {t.comment || <span className="text-gray-300">—</span>}
                                                 </td>
                                                 <td className="p-2.5 text-right pr-4 font-mono font-semibold text-gray-800">
@@ -1485,6 +1915,290 @@ export default function App() {
               </div>
             )}
 
+            {/* Revenue Details by Service/Product Tab Content */}
+            {activeTab === 'revenue-details' && (
+              <div className="space-y-6">
+                
+                {/* Header Information Banner */}
+                <div className="bg-gradient-to-r from-indigo-900 to-indigo-800 rounded-3xl p-6 text-white shadow-md">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="p-2 bg-white/10 rounded-xl">
+                          <Layers className="w-5 h-5 text-indigo-200" />
+                        </span>
+                        <h3 className="font-display font-bold text-lg text-white">
+                          Детализация доходной части (графа «Услуга/Товар»)
+                        </h3>
+                      </div>
+                      <p className="text-xs text-indigo-200 max-w-2xl leading-relaxed">
+                        Строки отчета, по которым записи в графе «Услуга/Товар» совпадают, автоматически сгруппированы и просуммированы. 
+                        Вы можете просмотреть как итоговую сумму по каждой услуге или товару, так и раскрыть все связанные транзакции.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => downloadRevenueSpreadsheet(revenueDetails || [], totalRevenue)}
+                      className="px-4 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer whitespace-nowrap self-stretch md:self-auto justify-center"
+                      title="Выгрузить отдельный Excel файл с детализацией по Услугам/Товарам"
+                    >
+                      <Download className="w-4 h-4 text-indigo-700" />
+                      <span>Экспорт в Excel (XLSX)</span>
+                    </button>
+                  </div>
+
+                  {/* Summary KPI Counters inside Banner */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-indigo-700/60">
+                    <div className="bg-white/10 rounded-2xl p-3">
+                      <div className="text-[10px] uppercase font-bold text-indigo-200 tracking-wider">Всего доходов</div>
+                      <div className="text-xl font-bold font-mono mt-1 text-white">
+                        {revenueStats.totalSum.toLocaleString('ru-RU')} ₽
+                      </div>
+                    </div>
+                    <div className="bg-white/10 rounded-2xl p-3">
+                      <div className="text-[10px] uppercase font-bold text-indigo-200 tracking-wider">Позиций (Услуг/Товаров)</div>
+                      <div className="text-xl font-bold font-mono mt-1 text-white">
+                        {filteredRevenueDetails.length} <span className="text-xs text-indigo-300 font-normal">из {revenueDetails?.length || 0}</span>
+                      </div>
+                    </div>
+                    <div className="bg-white/10 rounded-2xl p-3">
+                      <div className="text-[10px] uppercase font-bold text-indigo-200 tracking-wider">Всего операций</div>
+                      <div className="text-xl font-bold font-mono mt-1 text-white">
+                        {revenueStats.totalCount} <span className="text-xs text-indigo-300 font-normal">строк</span>
+                      </div>
+                    </div>
+                    <div className="bg-white/10 rounded-2xl p-3">
+                      <div className="text-[10px] uppercase font-bold text-indigo-200 tracking-wider">Услуги / Товары</div>
+                      <div className="text-xs font-mono mt-1 text-white flex flex-col gap-0.5">
+                        <span className="truncate">Услуги: {revenueStats.servicesSum.toLocaleString('ru-RU')} ₽</span>
+                        <span className="truncate">Товары: {revenueStats.goodsSum.toLocaleString('ru-RU')} ₽</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Search & Category Filter Toolbar */}
+                <div className="bg-white rounded-2xl border border-gray-150 p-4 shadow-sm flex flex-col sm:flex-row gap-4 items-center justify-between">
+                  {/* Search query input */}
+                  <div className="flex items-center gap-2 bg-gray-50 px-3.5 py-2 rounded-xl border border-gray-150 w-full sm:max-w-md">
+                    <Search className="w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={revenueSearch}
+                      onChange={(e) => setRevenueSearch(e.target.value)}
+                      placeholder="Поиск по названию услуги, товара или категории..."
+                      className="bg-transparent text-xs w-full outline-none text-gray-700 border-none inline-block focus:ring-0"
+                    />
+                    {revenueSearch && (
+                      <button onClick={() => setRevenueSearch('')} className="text-gray-400 hover:text-gray-600 text-xs select-none font-medium">
+                        Очистить
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter category pills */}
+                  <div className="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
+                    <button
+                      onClick={() => setRevenueCategoryFilter('all')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                        revenueCategoryFilter === 'all'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Все ({revenueDetails?.length || 0})
+                    </button>
+                    <button
+                      onClick={() => setRevenueCategoryFilter('services')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                        revenueCategoryFilter === 'services'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Только услуги
+                    </button>
+                    <button
+                      onClick={() => setRevenueCategoryFilter('goods')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                        revenueCategoryFilter === 'goods'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Только товары
+                    </button>
+                    <button
+                      onClick={() => setRevenueCategoryFilter('other')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                        revenueCategoryFilter === 'other'
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      Прочие / Сертификаты
+                    </button>
+                  </div>
+                </div>
+
+                {/* Main Detailing Table */}
+                <div className="bg-white rounded-3xl border border-gray-150 shadow-sm overflow-hidden">
+                  <div className="p-4 bg-gray-50/70 border-b border-gray-150 flex items-center justify-between select-none">
+                    <div className="flex items-center gap-2">
+                      <Table className="w-4 h-4 text-indigo-600" />
+                      <h3 className="font-display font-bold text-xs uppercase tracking-wider text-gray-700">
+                        Сгруппированные записи по графе «Услуга/Товар»
+                      </h3>
+                    </div>
+                    <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-150 px-2.5 py-0.5 rounded-md font-semibold">
+                      Показано строк: {filteredRevenueDetails.length}
+                    </span>
+                  </div>
+
+                  {filteredRevenueDetails.length === 0 ? (
+                    <div className="p-12 text-center text-gray-400 text-xs">
+                      {revenueSearch 
+                        ? `По запросу «${revenueSearch}» ничего не найдено.` 
+                        : 'Нет данных о доходах или в загруженном файле не заполнена графа «Услуга/Товар».'}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-gray-50 text-gray-600 font-bold select-none h-11 border-b border-gray-150">
+                            <th className="p-3.5 pl-6 w-16 text-center font-mono text-[10px] text-gray-400">№</th>
+                            <th className="p-3.5">Наименование из графы «Услуга/Товар»</th>
+                            <th className="p-3.5 w-48">Категория отчета</th>
+                            <th className="p-3.5 text-center w-36">Кол-во операций</th>
+                            <th className="p-3.5 text-center w-32">Доля в выручке</th>
+                            <th className="p-3.5 text-right pr-6 w-44">Итоговая сумма</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 font-sans">
+                          {filteredRevenueDetails.map((item, idx) => {
+                            const isExpanded = !!expandedRevenueItems[item.name];
+                            const share = totalRevenue > 0 ? (item.sum / totalRevenue) * 100 : 0;
+                            const isService = item.category.toLowerCase().includes('услуг');
+                            const isGoods = item.category.toLowerCase().includes('товар');
+
+                            return (
+                              <React.Fragment key={`rev_group_${idx}`}>
+                                <tr
+                                  className="hover:bg-indigo-50/20 transition-colors h-12 cursor-pointer"
+                                  onClick={() => setExpandedRevenueItems(prev => ({ ...prev, [item.name]: !prev[item.name] }))}
+                                >
+                                  <td className="p-3 text-center font-mono text-[11px] text-gray-400 border-r border-gray-50 pl-6">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="p-3 font-medium text-gray-850">
+                                    <div className="flex items-center gap-2">
+                                      <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                                      <span className="font-semibold text-gray-900">{item.name}</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                      isService 
+                                        ? 'bg-blue-50 text-blue-700 border-blue-150'
+                                        : isGoods
+                                        ? 'bg-amber-50 text-amber-700 border-amber-150'
+                                        : 'bg-purple-50 text-purple-700 border-purple-150'
+                                    }`}>
+                                      {item.category}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className="font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded text-[11px]">
+                                      {item.count} {item.count === 1 ? 'операция' : item.count < 5 ? 'операции' : 'операций'}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center font-mono text-gray-600 font-semibold text-[11px]">
+                                    {share.toFixed(1)}%
+                                  </td>
+                                  <td className="p-3 text-right pr-6 font-mono font-bold text-[13px] text-gray-900">
+                                    {item.sum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                  </td>
+                                </tr>
+
+                                {/* Expanded Drawer: All underlying transactions for this grouped service/product */}
+                                {isExpanded && item.transactions && item.transactions.length > 0 && (
+                                  <tr className="bg-indigo-50/15">
+                                    <td colSpan={6} className="p-4 pl-12 bg-indigo-50/25 border-b border-gray-150">
+                                      <div className="bg-white rounded-2xl border border-indigo-150 shadow-sm overflow-hidden">
+                                        <div className="p-3 bg-indigo-50/60 border-b border-indigo-100 flex items-center justify-between text-xs font-semibold text-indigo-950">
+                                          <span>Все входящие операции по позиции «{item.name}» ({item.transactions.length} шт.):</span>
+                                          <span className="font-mono text-indigo-700 font-bold">
+                                            Сумма: {item.sum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                          </span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-left text-[11px] divide-y divide-gray-150">
+                                            <thead className="bg-gray-50/80 font-bold text-gray-600 uppercase text-[9px] select-none">
+                                              <tr>
+                                                <th className="p-2.5 pl-4 w-28">Дата</th>
+                                                <th className="p-2.5 w-44">Контрагент / Клиент</th>
+                                                <th className="p-2.5">Назначение платежа</th>
+                                                <th className="p-2.5">Комментарий</th>
+                                                <th className="p-2.5 text-right pr-4 w-36">Сумма операции</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100 font-sans text-gray-700">
+                                              {item.transactions.map((t, tIdx) => (
+                                                <tr key={`tx_${idx}_${tIdx}`} className="hover:bg-gray-50/60 transition-colors">
+                                                  <td className="p-2.5 pl-4 font-mono text-gray-500">
+                                                    {t.date ? new Date(t.date).toLocaleDateString('ru-RU') : t.dateStr || '—'}
+                                                  </td>
+                                                  <td className="p-2.5 font-medium text-gray-850">
+                                                    {t.counterparty || <span className="text-gray-400 italic">Не указан</span>}
+                                                  </td>
+                                                  <td className="p-2.5 text-gray-700">
+                                                    {t.category || '—'}
+                                                  </td>
+                                                  <td className="p-2.5 text-gray-500 italic max-w-xs truncate" title={t.comment}>
+                                                    {t.comment || '—'}
+                                                  </td>
+                                                  <td className="p-2.5 text-right pr-4 font-mono font-bold text-gray-900">
+                                                    {t.sum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </tbody>
+                        {/* Table Footer with totals */}
+                        <tfoot className="bg-gray-50 font-bold border-t border-gray-200">
+                          <tr className="h-11">
+                            <td className="p-3 pl-6 text-center text-gray-400" colSpan={3}>
+                              Итого по сгруппированным строкам
+                            </td>
+                            <td className="p-3 text-center font-mono text-indigo-700">
+                              {filteredRevenueDetails.reduce((sum, d) => sum + d.count, 0)} оп.
+                            </td>
+                            <td className="p-3 text-center font-mono text-gray-600">
+                              {totalRevenue > 0 
+                                ? `${((filteredRevenueDetails.reduce((sum, d) => sum + d.sum, 0) / totalRevenue) * 100).toFixed(1)}%`
+                                : '—'}
+                            </td>
+                            <td className="p-3 text-right pr-6 font-mono text-gray-900 text-[13px]">
+                              {filteredRevenueDetails.reduce((sum, d) => sum + d.sum, 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Salary Payments tab content */}
             {activeTab === 'salary' && (
               <div className="space-y-6">
@@ -1622,6 +2336,611 @@ export default function App() {
 
           </div>
         )}
+      </div>
+    )}
+
+    {/* ========================================================================= */}
+    {/* TAB 2: ОТЧЕТ ПО УСЛУГАМ С РАСПРЕДЕЛЕНИЕМ ЗАТРАТ                          */}
+    {/* ========================================================================= */}
+    {primaryTab === 'services' && (
+      <div className="space-y-6">
+        
+        {/* Header Information Banner */}
+        <div className="bg-gradient-to-r from-indigo-900 via-indigo-850 to-indigo-800 rounded-3xl p-6 text-white shadow-md">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="p-2 bg-white/10 rounded-xl">
+                  <Scissors className="w-5 h-5 text-indigo-200" />
+                </span>
+                <h2 className="font-display font-extrabold text-xl text-white">
+                  Отчет по услугам и распределению затрат (Вкладка 2)
+                </h2>
+              </div>
+              <p className="text-xs text-indigo-200 max-w-3xl leading-relaxed">
+                Отчет формируется на основе загружаемого файла по услугам и финансового отчета из 1-й вкладки:
+                графа <strong>«Услуга»</strong> группирует одинаковые записи, графа <strong>«Скидка»</strong> суммирует скидки, 
+                графа <strong>«Сумма выручки»</strong> складывает «Баллы» + «Абонементы» + «Сертификаты» + «Оплачено со счетов клиентов» + «Оплачено деньгами». 
+                Графы <strong>«Переменные затраты»</strong> и <strong>«Постоянные затраты»</strong> заполняются путем распределения затрат из финансового отчета пропорционально выручке.
+              </p>
+            </div>
+
+            <div className="flex gap-2 flex-wrap self-stretch md:self-auto justify-end">
+              {servicesRecords.length === 0 && (
+                <button
+                  onClick={loadDemoServicesData}
+                  className="px-4 py-2.5 bg-indigo-700/80 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs flex items-center gap-1.5 border border-indigo-500/50 transition-all cursor-pointer"
+                  title="Загрузить тестовые услуги салона красоты"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Загрузить Демо Услуг</span>
+                </button>
+              )}
+              {servicesRecords.length > 0 && (
+                <button
+                  onClick={() => downloadServicesSpreadsheet(servicesReport.items, servicesReport.summary, servicesFileName ? `Отчет_${servicesFileName}` : 'Отчет_по_услугам.xlsx')}
+                  className="px-4 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                  title="Скачать сформированный отчет по услугам в Excel"
+                >
+                  <Download className="w-4 h-4 text-indigo-700" />
+                  <span>Экспорт в Excel (XLSX)</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Upload Box or Active File Summary */}
+        {servicesRecords.length === 0 ? (
+          <div 
+            onDragEnter={(e) => { e.preventDefault(); setServicesDragActive(true); }}
+            onDragOver={(e) => { e.preventDefault(); setServicesDragActive(true); }}
+            onDragLeave={(e) => { e.preventDefault(); setServicesDragActive(false); }}
+            onDrop={handleServicesDrop}
+            className={`bg-white rounded-3xl border-2 border-dashed p-8 text-center transition-all shadow-sm ${
+              servicesDragActive ? 'border-indigo-500 bg-indigo-50/20' : 'border-gray-200 hover:border-indigo-300'
+            }`}
+          >
+            <div className="max-w-md mx-auto space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center mx-auto text-indigo-600">
+                <Upload className="w-8 h-8" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-lg text-gray-900">
+                  Загрузите файл с данными по услугам
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  Перетащите файл сюда или нажмите кнопку ниже. Поддерживаются форматы Excel <strong>.xlsx, .xls</strong> и <strong>.csv</strong>
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5 justify-center pt-2">
+                <button
+                  onClick={() => servicesFileInputRef.current?.click()}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-150 transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Выбрать файл по услугам</span>
+                </button>
+                <button
+                  onClick={loadDemoServicesData}
+                  className="px-5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  <span>Загрузить Демо-данные услуг</span>
+                </button>
+              </div>
+
+              <div className="pt-4 border-t border-gray-100 text-[11px] text-gray-400 space-y-1">
+                <div>Ожидаемые колонки: <span className="font-mono text-gray-600">«Услуга», «Скидка», «Баллы», «Абонементы», «Сертификаты», «Оплачено со счетов клиентов, ₽», «Оплачено деньгами, ₽»</span></div>
+                <div className="text-indigo-600 font-medium flex items-center justify-center gap-1">
+                  <Sparkles className="w-3 h-3 text-indigo-500" />
+                  <span>Включена автоматическая предобработка числовых показателей (удаление пробелов, валют ₽/$, бухгалтерских скобок)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-150 p-4 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-sm text-gray-900">{servicesFileName || 'Файл_по_услугам.xlsx'}</span>
+                  <span className="text-[10px] px-2 py-0.2 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-150">
+                    Загружен
+                  </span>
+                  <span className="text-[10px] px-2 py-0.2 rounded-full font-bold bg-indigo-50 text-indigo-700 border border-indigo-150 flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5 text-indigo-500" />
+                    <span>Числовая предобработка активна</span>
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5 flex flex-wrap items-center gap-2 sm:gap-3">
+                  <span>Исходных строк: <strong className="text-gray-700">{servicesRecords.length}</strong></span>
+                  <span>•</span>
+                  <span>Сгруппировано услуг: <strong className="text-indigo-700">{servicesReport.items.length}</strong></span>
+                  <span>•</span>
+                  <span>Очищено числовых ячеек: <strong className="text-emerald-700">{servicesStats?.cleanedFieldsCount || (servicesRecords.length * 6)}</strong></span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => servicesFileInputRef.current?.click()}
+                className="px-3.5 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
+                title="Загрузить другой файл по услугам"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Сменить файл</span>
+              </button>
+              <button
+                onClick={() => {
+                  setServicesRecords([]);
+                  setServicesFileName(null);
+                  setNotification({
+                    status: 'success',
+                    message: 'Данные по услугам сброшены. Вы можете загрузить новый файл.'
+                  });
+                }}
+                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1"
+                title="Очистить загруженные услуги"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Очистить</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Financial Report Costs Allocation Linkage Panel */}
+        <div className="bg-white rounded-3xl border border-gray-150 p-6 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 pb-3">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-4.5 h-4.5 text-indigo-600" />
+              <h3 className="font-display font-bold text-sm text-gray-900">
+                Распределение затрат из финансового отчета (1-я вкладка)
+              </h3>
+            </div>
+            
+            {/* Status indicator badge */}
+            <div className="flex items-center gap-2">
+              {(variableExpensesFromReport > 0 || fixedExpensesFromReport > 0) ? (
+                <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-150 px-2.5 py-1 rounded-xl flex items-center gap-1.5">
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Затраты подгружены из финансового отчета</span>
+                </span>
+              ) : (
+                <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-150 px-2.5 py-1 rounded-xl flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <span>В 1-й вкладке финотчет еще не рассчитан (можно ввести вручную)</span>
+                </span>
+              )}
+
+              <button
+                onClick={() => {
+                  if (!isServicesCustomExpensesActive) {
+                    setCustomVariableExpenses(String(activeVariableExpenses));
+                    setCustomFixedExpenses(String(activeFixedExpenses));
+                  }
+                  setIsServicesCustomExpensesActive(!isServicesCustomExpensesActive);
+                }}
+                className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-800 bg-indigo-50 border border-indigo-150 px-2.5 py-1 rounded-xl cursor-pointer transition-all"
+              >
+                {isServicesCustomExpensesActive ? 'Вернуть авто-связку' : 'Ручная корректировка'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Variable Costs Card */}
+            <div className="bg-amber-50/40 rounded-2xl p-4 border border-amber-150/50">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider">Переменные затраты</span>
+                <span className="text-[10px] bg-amber-100 text-amber-800 font-mono px-1.5 py-0.2 rounded font-bold">Статья 9</span>
+              </div>
+
+              {isServicesCustomExpensesActive ? (
+                <div className="mt-2">
+                  <input
+                    type="number"
+                    value={customVariableExpenses}
+                    onChange={(e) => setCustomVariableExpenses(e.target.value)}
+                    placeholder="Сумма в рублях"
+                    className="w-full text-lg font-mono font-bold bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-amber-900 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  />
+                  <span className="text-[10px] text-amber-700 mt-1 block">Ручной ввод переменных затрат</span>
+                </div>
+              ) : (
+                <div className="mt-2">
+                  <div className="font-display font-extrabold text-2xl text-amber-900">
+                    {activeVariableExpenses.toLocaleString('ru-RU')} ₽
+                  </div>
+                  <div className="text-[11px] text-amber-700/90 mt-1 leading-relaxed">
+                    Сумма строки «Расходы переменные» из финансового отчета. Распределяется пропорционально выручке.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Fixed Costs Card */}
+            <div className="bg-purple-50/40 rounded-2xl p-4 border border-purple-150/50">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-purple-800 tracking-wider">Постоянные затраты</span>
+                <span className="text-[10px] bg-purple-100 text-purple-800 font-mono px-1.5 py-0.2 rounded font-bold">Статья 36</span>
+              </div>
+
+              {isServicesCustomExpensesActive ? (
+                <div className="mt-2">
+                  <input
+                    type="number"
+                    value={customFixedExpenses}
+                    onChange={(e) => setCustomFixedExpenses(e.target.value)}
+                    placeholder="Сумма в рублях"
+                    className="w-full text-lg font-mono font-bold bg-white border border-purple-300 rounded-xl px-3 py-1.5 text-purple-900 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                  />
+                  <span className="text-[10px] text-purple-700 mt-1 block">Ручной ввод постоянных затрат</span>
+                </div>
+              ) : (
+                <div className="mt-2">
+                  <div className="font-display font-extrabold text-2xl text-purple-900">
+                    {activeFixedExpenses.toLocaleString('ru-RU')} ₽
+                  </div>
+                  <div className="text-[11px] text-purple-700/90 mt-1 leading-relaxed">
+                    Сумма строки «Расходы постоянные» из финансового отчета. Распределяется пропорционально выручке.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Total Cost to Allocate Card */}
+            <div className="bg-indigo-50/40 rounded-2xl p-4 border border-indigo-150/50 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-indigo-800 tracking-wider">Всего затрат к распределению</span>
+                  <span className="text-[10px] bg-indigo-100 text-indigo-800 font-mono px-1.5 py-0.2 rounded font-bold">100% базы</span>
+                </div>
+                <div className="font-display font-extrabold text-2xl text-indigo-950 mt-2">
+                  {(activeVariableExpenses + activeFixedExpenses).toLocaleString('ru-RU')} ₽
+                </div>
+                <div className="text-[11px] text-indigo-700/90 mt-1 leading-relaxed">
+                  Полная сумма затрат, распределяемая по всем услугам согласно их доле в выручке.
+                </div>
+              </div>
+
+              {rawRecords.length === 0 && (
+                <button
+                  onClick={loadDemoData}
+                  className="mt-3 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+                >
+                  <span>Загрузить Демо-финансовый отчет для связки →</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* KPI Bento Grid for Services */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white rounded-2xl border border-gray-150 p-5 shadow-sm">
+            <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Сумма выручки по услугам</div>
+            <div className="font-display font-extrabold text-2xl text-emerald-600 mt-2">
+              {servicesReport.summary.totalRevenue.toLocaleString('ru-RU')} ₽
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Баллы + Абонементы + Сертификаты + Счета + Деньги
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-150 p-5 shadow-sm">
+            <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Предоставлено скидок</div>
+            <div className="font-display font-extrabold text-2xl text-amber-600 mt-2">
+              {servicesReport.summary.totalDiscount.toLocaleString('ru-RU')} ₽
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Суммарно из графы «Скидка»
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-150 p-5 shadow-sm">
+            <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Всего затрат по услугам</div>
+            <div className="font-display font-extrabold text-2xl text-rose-500 mt-2">
+              {servicesReport.summary.totalCost.toLocaleString('ru-RU')} ₽
+            </div>
+            <div className="text-xs text-gray-500 mt-1 flex items-center justify-between">
+              <span>Пер: {servicesReport.summary.totalVariableCost.toLocaleString('ru-RU')} ₽</span>
+              <span>Пост: {servicesReport.summary.totalFixedCost.toLocaleString('ru-RU')} ₽</span>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-150 p-5 shadow-sm">
+            <div className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Прибыль / Рентабельность</div>
+            <div className="font-display font-extrabold text-2xl text-indigo-700 mt-2">
+              {servicesReport.summary.totalProfit.toLocaleString('ru-RU')} ₽
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
+              <span className="font-mono bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded text-[10px]">
+                {servicesReport.summary.totalProfitability.toFixed(1)}% рентабельность
+              </span>
+              <span>по всем услугам</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Toolbar: Search, Filters and Download */}
+        <div className="bg-white rounded-2xl border border-gray-150 p-4 shadow-sm flex flex-col sm:flex-row gap-4 items-center justify-between">
+          <div className="flex items-center gap-2 bg-gray-50 px-3.5 py-2 rounded-xl border border-gray-150 w-full sm:max-w-md">
+            <Search className="w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={servicesSearchQuery}
+              onChange={(e) => setServicesSearchQuery(e.target.value)}
+              placeholder="Поиск по наименованию услуги..."
+              className="bg-transparent text-xs w-full outline-none text-gray-700 border-none inline-block focus:ring-0"
+            />
+            {servicesSearchQuery && (
+              <button 
+                onClick={() => setServicesSearchQuery('')} 
+                className="text-gray-400 hover:text-gray-600 text-xs font-medium"
+              >
+                Очистить
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+            <span className="text-xs text-gray-500">
+              Показано позиций: <strong className="text-gray-900">{filteredServiceItems.length}</strong> из {servicesReport.items.length}
+            </span>
+
+            {servicesReport.items.length > 0 && (
+              <button
+                onClick={() => downloadServicesSpreadsheet(servicesReport.items, servicesReport.summary, servicesFileName ? `Отчет_${servicesFileName}` : 'Отчет_по_услугам.xlsx')}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                title="Скачать Excel-таблицу отчета по услугам со всеми столбцами и общим итогом"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Скачать XLSX</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Main Services Report Table */}
+        <div className="bg-white rounded-3xl border border-gray-150 shadow-sm overflow-hidden">
+          <div className="p-4 bg-gray-50/70 border-b border-gray-150 flex items-center justify-between select-none">
+            <div className="flex items-center gap-2">
+              <Table className="w-4 h-4 text-indigo-600" />
+              <h3 className="font-display font-bold text-xs uppercase tracking-wider text-gray-700">
+                Отчет по услугам (Группировка и пропорциональное распределение затрат)
+              </h3>
+            </div>
+            <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-150 px-2.5 py-0.5 rounded-md font-semibold">
+              Уникальных услуг: {servicesReport.items.length}
+            </span>
+          </div>
+
+          {filteredServiceItems.length === 0 ? (
+            <div className="p-16 text-center text-gray-400 text-xs">
+              {servicesSearchQuery 
+                ? `По запросу «${servicesSearchQuery}» ничего не найдено.` 
+                : 'Нет данных для отображения. Загрузите файл с данными по услугам выше или нажмите «Загрузить Демо Услуг».'}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-600 font-bold select-none h-11 border-b border-gray-150 text-[10.5px]">
+                    <th className="p-3 text-center w-12 font-mono text-[10px] text-gray-400">№</th>
+                    <th className="p-3 min-w-[220px]">Услуга</th>
+                    <th className="p-3 text-center w-16">Кол-во</th>
+                    <th className="p-3 text-right w-24">Скидка</th>
+                    <th className="p-3 text-right w-20">Баллы</th>
+                    <th className="p-3 text-right w-24">Абонементы</th>
+                    <th className="p-3 text-right w-24">Сертификаты</th>
+                    <th className="p-3 text-right w-28">Со счетов, ₽</th>
+                    <th className="p-3 text-right w-28">Деньгами, ₽</th>
+                    <th className="p-3 text-right w-32 font-bold text-indigo-950 bg-indigo-50/30">Сумма выручки</th>
+                    <th className="p-3 text-center w-20 bg-indigo-50/20">Доля</th>
+                    <th className="p-3 text-right w-32 text-amber-800 bg-amber-50/20">Переменные затраты</th>
+                    <th className="p-3 text-right w-32 text-purple-800 bg-purple-50/20">Постоянные затраты</th>
+                    <th className="p-3 text-right w-32 text-rose-800 bg-rose-50/20">Всего затрат</th>
+                    <th className="p-3 text-right w-32 text-emerald-800 bg-emerald-50/20 font-bold">Прибыль</th>
+                    <th className="p-3 text-center w-24 pr-4">Рентабельность</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 font-sans text-gray-800">
+                  {filteredServiceItems.map((item, idx) => {
+                    const isExpanded = !!expandedServiceItems[item.service];
+
+                    return (
+                      <React.Fragment key={`svc_row_${idx}`}>
+                        <tr 
+                          className="hover:bg-indigo-50/25 transition-colors h-11 cursor-pointer select-none"
+                          onClick={() => setExpandedServiceItems(prev => ({ ...prev, [item.service]: !prev[item.service] }))}
+                        >
+                          <td className="p-3 text-center font-mono text-[11px] text-gray-400 border-r border-gray-50">
+                            {idx + 1}
+                          </td>
+                          <td className="p-3 font-medium text-gray-900">
+                            <div className="flex items-center gap-1.5">
+                              <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                              <span className="font-semibold text-gray-900">{item.service}</span>
+                            </div>
+                          </td>
+                          <td className="p-3 text-center font-mono font-semibold text-indigo-700">
+                            {item.count}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.discount > 0 ? `${item.discount.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.points > 0 ? `${item.points.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.subscriptions > 0 ? `${item.subscriptions.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.certificates > 0 ? `${item.certificates.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.clientAccounts > 0 ? `${item.clientAccounts.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-600">
+                            {item.money > 0 ? `${item.money.toLocaleString('ru-RU')} ₽` : '—'}
+                          </td>
+                          <td className="p-3 text-right font-mono font-bold text-indigo-950 bg-indigo-50/30">
+                            {item.revenue.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </td>
+                          <td className="p-3 text-center font-mono text-gray-600 bg-indigo-50/20 text-[11px]">
+                            {item.revenueShare.toFixed(1)}%
+                          </td>
+                          <td className="p-3 text-right font-mono text-amber-900 bg-amber-50/20 font-medium">
+                            {item.variableCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </td>
+                          <td className="p-3 text-right font-mono text-purple-900 bg-purple-50/20 font-medium">
+                            {item.fixedCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </td>
+                          <td className="p-3 text-right font-mono text-rose-700 bg-rose-50/20 font-semibold">
+                            {item.totalCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </td>
+                          <td className={`p-3 text-right font-mono font-bold bg-emerald-50/20 ${item.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                            {item.profit.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </td>
+                          <td className="p-3 text-center pr-4 font-mono text-[11px] font-semibold">
+                            <span className={`px-1.5 py-0.5 rounded ${item.profitability >= 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
+                              {item.profitability.toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+
+                        {/* Expanded Drawer: All raw records for this grouped service */}
+                        {isExpanded && item.rawRows && (
+                          <tr className="bg-indigo-50/15">
+                            <td colSpan={16} className="p-4 pl-12 bg-indigo-50/25 border-b border-gray-150">
+                              <div className="bg-white rounded-2xl border border-indigo-150 shadow-sm overflow-hidden">
+                                <div className="p-3 bg-indigo-50/60 border-b border-indigo-100 flex items-center justify-between text-xs font-semibold text-indigo-950">
+                                  <span>Все сгруппированные строки по услуге «{item.service}» ({item.rawRows.length} оп.):</span>
+                                  <span className="font-mono text-indigo-700 font-bold">
+                                    Итого выручка: {item.revenue.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                  </span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-[11px] divide-y divide-gray-150">
+                                    <thead className="bg-gray-50/80 font-bold text-gray-600 uppercase text-[9px] select-none">
+                                      <tr>
+                                        <th className="p-2.5 pl-4 w-16">Строка</th>
+                                        <th className="p-2.5 text-right w-24">Скидка</th>
+                                        <th className="p-2.5 text-right w-20">Баллы</th>
+                                        <th className="p-2.5 text-right w-24">Абонементы</th>
+                                        <th className="p-2.5 text-right w-24">Сертификаты</th>
+                                        <th className="p-2.5 text-right w-28">Со счетов, ₽</th>
+                                        <th className="p-2.5 text-right w-28">Деньгами, ₽</th>
+                                        <th className="p-2.5 text-right pr-4 w-32 font-bold text-indigo-950">Сумма выручки</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100 font-sans text-gray-700 font-mono">
+                                      {item.rawRows.map((r, rIdx) => (
+                                        <tr key={`raw_svc_${idx}_${rIdx}`} className="hover:bg-gray-50/60 transition-colors">
+                                          <td className="p-2.5 pl-4 text-gray-400">
+                                            #{r.rawIndex}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.discount > 0 ? `${r.discount.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.points > 0 ? `${r.points.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.subscriptions > 0 ? `${r.subscriptions.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.certificates > 0 ? `${r.certificates.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.clientAccounts > 0 ? `${r.clientAccounts.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right text-gray-600">
+                                            {r.money > 0 ? `${r.money.toLocaleString('ru-RU')} ₽` : '—'}
+                                          </td>
+                                          <td className="p-2.5 text-right pr-4 font-bold text-indigo-950">
+                                            {r.revenue.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+
+                {/* Grand Total Row (Общий итог по всем услугам) */}
+                <tfoot className="bg-gray-100 font-bold border-t-2 border-indigo-400 text-[11px] text-gray-900 select-none">
+                  <tr className="h-12">
+                    <td className="p-3 text-center font-mono text-gray-500">∑</td>
+                    <td className="p-3 font-extrabold uppercase text-indigo-950">
+                      ИТОГО ПО ВСЕМ УСЛУГАМ
+                    </td>
+                    <td className="p-3 text-center font-mono font-extrabold text-indigo-700">
+                      {servicesReport.summary.totalCount}
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalDiscount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalPoints.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalSubscriptions.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalCertificates.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalClientAccounts.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {servicesReport.summary.totalMoney.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono font-extrabold text-indigo-950 bg-indigo-150/40 text-xs">
+                      {servicesReport.summary.totalRevenue.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-center font-mono font-bold bg-indigo-150/30">
+                      100.0%
+                    </td>
+                    <td className="p-3 text-right font-mono text-amber-900 bg-amber-100/40 font-bold">
+                      {servicesReport.summary.totalVariableCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono text-purple-900 bg-purple-100/40 font-bold">
+                      {servicesReport.summary.totalFixedCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-right font-mono text-rose-800 bg-rose-100/40 font-bold">
+                      {servicesReport.summary.totalCost.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className={`p-3 text-right font-mono font-extrabold bg-emerald-100/40 text-xs ${servicesReport.summary.totalProfit >= 0 ? 'text-emerald-800' : 'text-rose-700'}`}>
+                      {servicesReport.summary.totalProfit.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    </td>
+                    <td className="p-3 text-center pr-4 font-mono font-extrabold">
+                      <span className={`px-2 py-0.5 rounded ${servicesReport.summary.totalProfitability >= 0 ? 'bg-emerald-100 text-emerald-900' : 'bg-rose-100 text-rose-900'}`}>
+                        {servicesReport.summary.totalProfitability.toFixed(1)}%
+                      </span>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
       </main>
     </div>
   );
