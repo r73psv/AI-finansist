@@ -8,9 +8,17 @@ import {
   RawServiceRecord,
   ServiceReportItem,
   ServicesReportSummary,
-  ServicesPreprocessingStats
+  ServicesPreprocessingStats,
+  HallReportGroup,
+  ServicesReportResult
 } from './types';
+import { classifyServiceHall, HALL_NAMES, HallName } from './hallsClassifier';
 import { FINANCIAL_TEMPLATE } from './financialTemplate';
+import { 
+  calculateSuppliersAllocation, 
+  SuppliersAllocationBreakdown, 
+  classifySupplierHall 
+} from './suppliersClassifier';
 
 // String cleaning for fuzzy matching
 export function normalizeString(str: string | null | undefined): string {
@@ -858,6 +866,21 @@ export function getSectionBounds(srcCategory: string, N: number): SectionBounds 
     };
   }
 
+  // 11. Founders payments ("2026/Учредители", "Учредители", "Выплаты учредителям")
+  if (
+    norm.includes("учредител") ||
+    norm.includes("2026/учредител") ||
+    norm.includes("выплаты учредител")
+  ) {
+    const idx = 115 + N;
+    return {
+      minIndex: idx,
+      maxIndex: idx,
+      defaultIndex: idx,
+      sectionName: "founders"
+    };
+  }
+
   return null;
 }
 
@@ -905,6 +928,23 @@ function findMatchingRowIndexInternal(
       const idx = report.findIndex(r => r.label === "Выручка с услуг");
       if (idx !== -1) return idx;
     }
+  }
+
+  // 0.1 Founders payments: строки «2026/Учредители», «Учредители», «Выплаты учредителям» -> статья «Выплаты учредителям»
+  const normCP = normalizeString(srcCounterparty);
+  const normComment = normalizeString(srcComment);
+  if (
+    normCat.includes("учредител") ||
+    normCat.includes("2026/учредител") ||
+    normCat.includes("2026 / учредител") ||
+    normCat.includes("2026//учредител") ||
+    normCat.includes("выплаты учредител") ||
+    normCP.includes("учредител") ||
+    normComment.includes("2026/учредител") ||
+    normComment.includes("выплаты учредител")
+  ) {
+    const foundersIdx = report.findIndex(r => r.label === "Выплаты учредителям");
+    if (foundersIdx !== -1) return foundersIdx;
   }
 
   // 1. FILE-SPECIFIC OVERRIDE RULES
@@ -1985,12 +2025,17 @@ export function parseServicesSpreadsheet(workbook: XLSX.WorkBook): {
   return { records, errors, stats };
 }
 
-// Generate Services Report with Cost Allocation
+// Generate Services Report with Hall Grouping, Supplier Allocation, Salary Distribution, and Cost Allocation
 export function generateServicesReport(
   records: RawServiceRecord[],
   totalVariableExpenses: number,
-  totalFixedExpenses: number
-): { items: ServiceReportItem[]; summary: ServicesReportSummary } {
+  totalFixedExpenses: number,
+  supplierRows: { label: string; value: number; transactions?: RawRecord[] }[] = [],
+  customSupplierExpenses: number = 0,
+  hallMastersSalaries: Record<string, number> = {},
+  adminSalaryTotal: number = 0,
+  hallAreas: Record<string, number> = {}
+): ServicesReportResult & { suppliersBreakdown: SuppliersAllocationBreakdown } {
   const map = new Map<string, {
     canonicalName: string;
     count: number;
@@ -2045,6 +2090,8 @@ export function generateServicesReport(
   let totalMoney = 0;
   let totalCount = 0;
 
+  // Calculate preliminary hall revenues for supplier & admin salary proportional allocation
+  const hallRevenues: Record<string, number> = {};
   map.forEach((item) => {
     totalRevenue += item.revenue;
     totalDiscount += item.discount;
@@ -2054,21 +2101,73 @@ export function generateServicesReport(
     totalClientAccounts += item.clientAccounts;
     totalMoney += item.money;
     totalCount += item.count;
+
+    const h = classifyServiceHall(item.canonicalName);
+    hallRevenues[h] = (hallRevenues[h] || 0) + item.revenue;
+  });
+
+  // Calculate suppliers allocation between halls according to user regulation table
+  let effectiveSupplierRows = supplierRows;
+  if (customSupplierExpenses > 0 && supplierRows.length === 0) {
+    effectiveSupplierRows = [{ label: 'Расходы на поставщиков (ручной ввод)', value: customSupplierExpenses }];
+  }
+  const suppliersBreakdown = calculateSuppliersAllocation(effectiveSupplierRows, hallRevenues);
+  const hallSuppliersMap = new Map<string, number>();
+  suppliersBreakdown.hallSuppliersSummary.forEach((hSummary) => {
+    hallSuppliersMap.set(hSummary.hallName, hSummary.totalSupplierCost);
+  });
+
+  // Total salon area
+  let totalArea = 0;
+  HALL_NAMES.forEach((hName) => {
+    totalArea += (hallAreas[hName] || 0);
   });
 
   const absVariable = Math.abs(totalVariableExpenses);
   const absFixed = Math.abs(totalFixedExpenses);
+  const absAdminSalary = Math.abs(adminSalaryTotal);
+
+  // Pre-calculate per-hall salaries:
+  // - Зарплата мастеров: строго в сумме, введенной для каждого зала
+  // - Зарплата административного персонала: распределяется между всеми залами пропорционально выручке
+  const hallMasterSalariesMap = new Map<string, number>();
+  const hallAdminSalariesMap = new Map<string, number>();
+
+  HALL_NAMES.forEach((hName) => {
+    const hRev = hallRevenues[hName] || 0;
+    const hMasterSal = Math.abs(hallMastersSalaries[hName] || 0);
+    const hAdminSal = totalRevenue > 0 
+      ? parseFloat((absAdminSalary * (hRev / totalRevenue)).toFixed(2)) 
+      : parseFloat((absAdminSalary / 5).toFixed(2));
+    
+    hallMasterSalariesMap.set(hName, hMasterSal);
+    hallAdminSalariesMap.set(hName, hAdminSal);
+  });
 
   const items: ServiceReportItem[] = Array.from(map.values()).map((item) => {
+    const hall = classifyServiceHall(item.canonicalName);
+    const hallTotalRev = hallRevenues[hall] || 0;
+    const hallSupplierCost = hallSuppliersMap.get(hall) || 0;
+    const hallMasterSalary = hallMasterSalariesMap.get(hall) || 0;
+    const hallAdminSalary = hallAdminSalariesMap.get(hall) || 0;
+    
+    // Внутри зала расходы на поставщиков и зарплату распределяются пропорционально выручке услуги в данном зале
+    const hallShare = hallTotalRev > 0 ? (item.revenue / hallTotalRev) : 0;
+    const supplierCost = parseFloat((hallSupplierCost * hallShare).toFixed(2));
+    const masterSalary = parseFloat((hallMasterSalary * hallShare).toFixed(2));
+    const adminSalary = parseFloat((hallAdminSalary * hallShare).toFixed(2));
+    const salaryCost = parseFloat((masterSalary + adminSalary).toFixed(2));
+
     const share = totalRevenue > 0 ? (item.revenue / totalRevenue) : 0;
     const variableCost = parseFloat((absVariable * share).toFixed(2));
     const fixedCost = parseFloat((absFixed * share).toFixed(2));
-    const totalCost = parseFloat((variableCost + fixedCost).toFixed(2));
+    const totalCost = parseFloat((supplierCost + salaryCost + variableCost + fixedCost).toFixed(2));
     const profit = parseFloat((item.revenue - totalCost).toFixed(2));
     const profitability = item.revenue > 0 ? parseFloat(((profit / item.revenue) * 100).toFixed(2)) : 0;
 
     return {
       service: item.canonicalName,
+      hall,
       count: item.count,
       discount: parseFloat(item.discount.toFixed(2)),
       points: parseFloat(item.points.toFixed(2)),
@@ -2078,6 +2177,10 @@ export function generateServicesReport(
       money: parseFloat(item.money.toFixed(2)),
       revenue: parseFloat(item.revenue.toFixed(2)),
       revenueShare: parseFloat((share * 100).toFixed(2)),
+      supplierCost,
+      masterSalary,
+      adminSalary,
+      salaryCost,
       variableCost,
       fixedCost,
       totalCost,
@@ -2087,10 +2190,122 @@ export function generateServicesReport(
     };
   });
 
-  // Sort descending by revenue
+  // Sort items descending by revenue
   items.sort((a, b) => b.revenue - a.revenue);
 
-  const totalCost = parseFloat((absVariable + absFixed).toFixed(2));
+  // Group items by Hall
+  const hallsMap = new Map<string, ServiceReportItem[]>();
+  HALL_NAMES.forEach((hName) => hallsMap.set(hName, []));
+
+  items.forEach((item) => {
+    const list = hallsMap.get(item.hall) || hallsMap.get('Прочие услуги')!;
+    list.push(item);
+  });
+
+  const halls: HallReportGroup[] = [];
+
+  HALL_NAMES.forEach((hName) => {
+    const hallItems = hallsMap.get(hName) || [];
+    // Only include hall if it has items, or include the 5 standard salon halls
+    if (hallItems.length > 0 || hName !== 'Прочие услуги') {
+      let hCount = 0;
+      let hDiscount = 0;
+      let hPoints = 0;
+      let hSubs = 0;
+      let hCert = 0;
+      let hClientAcc = 0;
+      let hMoney = 0;
+      let hRevenue = 0;
+      let hSuppCost = 0;
+      let hVarCost = 0;
+      let hFixCost = 0;
+
+      hallItems.forEach((it) => {
+        hCount += it.count;
+        hDiscount += it.discount;
+        hPoints += it.points;
+        hSubs += it.subscriptions;
+        hCert += it.certificates;
+        hClientAcc += it.clientAccounts;
+        hMoney += it.money;
+        hRevenue += it.revenue;
+        hSuppCost += it.supplierCost;
+        hVarCost += it.variableCost;
+        hFixCost += it.fixedCost;
+      });
+
+      const summaryForHall = suppliersBreakdown.hallSuppliersSummary.find(s => s.hallName === hName);
+      const directSupplierCost = summaryForHall ? summaryForHall.directCost : 0;
+      const sharedSupplierCost = summaryForHall ? summaryForHall.allocatedSharedCost : 0;
+      const totalSupplierCost = parseFloat(hSuppCost.toFixed(2));
+
+      const hMasterSal = hallMasterSalariesMap.get(hName) || 0;
+      const hAdminSal = hallAdminSalariesMap.get(hName) || 0;
+      const hTotalSal = parseFloat((hMasterSal + hAdminSal).toFixed(2));
+
+      const hArea = hallAreas[hName] || 0;
+      const hAreaShare = totalArea > 0 ? parseFloat(((hArea / totalArea) * 100).toFixed(1)) : 0;
+
+      const hTotCost = parseFloat((totalSupplierCost + hTotalSal + hVarCost + hFixCost).toFixed(2));
+      const hProfit = parseFloat((hRevenue - hTotCost).toFixed(2));
+
+      const hRevShare = totalRevenue > 0 ? parseFloat(((hRevenue / totalRevenue) * 100).toFixed(2)) : 0;
+      const hProfitability = hRevenue > 0 ? parseFloat(((hProfit / hRevenue) * 100).toFixed(2)) : 0;
+
+      const hRevPerSqM = hArea > 0 ? parseFloat((hRevenue / hArea).toFixed(2)) : 0;
+      const hProfitPerSqM = hArea > 0 ? parseFloat((hProfit / hArea).toFixed(2)) : 0;
+
+      halls.push({
+        hallName: hName,
+        items: hallItems,
+        summary: {
+          totalCount: hCount,
+          totalDiscount: parseFloat(hDiscount.toFixed(2)),
+          totalPoints: parseFloat(hPoints.toFixed(2)),
+          totalSubscriptions: parseFloat(hSubs.toFixed(2)),
+          totalCertificates: parseFloat(hCert.toFixed(2)),
+          totalClientAccounts: parseFloat(hClientAcc.toFixed(2)),
+          totalMoney: parseFloat(hMoney.toFixed(2)),
+          totalRevenue: parseFloat(hRevenue.toFixed(2)),
+          totalRevenueShare: hRevShare,
+          area: hArea,
+          areaShare: hAreaShare,
+          revenuePerSqM: hRevPerSqM,
+          profitPerSqM: hProfitPerSqM,
+          directSupplierCost,
+          sharedSupplierCost,
+          totalSupplierCost,
+          masterSalary: hMasterSal,
+          adminSalary: hAdminSal,
+          totalSalaryCost: hTotalSal,
+          totalVariableCost: parseFloat(hVarCost.toFixed(2)),
+          totalFixedCost: parseFloat(hFixCost.toFixed(2)),
+          totalCost: hTotCost,
+          totalProfit: hProfit,
+          totalProfitability: hProfitability
+        }
+      });
+    }
+  });
+
+  let totalSupplierCost = 0;
+  let totalMasterSalary = 0;
+  let totalAdminSalary = 0;
+  let totalSalaryCost = 0;
+
+  halls.forEach(h => {
+    totalSupplierCost += h.summary.totalSupplierCost;
+    totalMasterSalary += h.summary.masterSalary;
+    totalAdminSalary += h.summary.adminSalary;
+    totalSalaryCost += h.summary.totalSalaryCost;
+  });
+
+  totalSupplierCost = parseFloat(totalSupplierCost.toFixed(2));
+  totalMasterSalary = parseFloat(totalMasterSalary.toFixed(2));
+  totalAdminSalary = parseFloat(totalAdminSalary.toFixed(2));
+  totalSalaryCost = parseFloat(totalSalaryCost.toFixed(2));
+
+  const totalCost = parseFloat((totalSupplierCost + totalSalaryCost + absVariable + absFixed).toFixed(2));
   const totalProfit = parseFloat((totalRevenue - totalCost).toFixed(2));
   const totalProfitability = totalRevenue > 0 ? parseFloat(((totalProfit / totalRevenue) * 100).toFixed(2)) : 0;
 
@@ -2103,6 +2318,11 @@ export function generateServicesReport(
     totalClientAccounts: parseFloat(totalClientAccounts.toFixed(2)),
     totalMoney: parseFloat(totalMoney.toFixed(2)),
     totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+    totalArea: parseFloat(totalArea.toFixed(1)),
+    totalSupplierCost,
+    totalMasterSalary,
+    totalAdminSalary,
+    totalSalaryCost,
     totalVariableCost: absVariable,
     totalFixedCost: absFixed,
     totalCost,
@@ -2110,40 +2330,115 @@ export function generateServicesReport(
     totalProfitability
   };
 
-  return { items, summary };
+  return { items, halls, summary, suppliersBreakdown };
 }
 
-// Download Services Report Spreadsheet
+// Download Services Report Spreadsheet with Hall Grouping
 export function downloadServicesSpreadsheet(
   items: ServiceReportItem[],
   summary: ServicesReportSummary,
-  fileName: string = 'Отчет_по_услугам.xlsx'
+  fileName: string = 'Отчет_по_услугам.xlsx',
+  halls?: HallReportGroup[],
+  suppliersBreakdown?: SuppliersAllocationBreakdown
 ): void {
   const wb = XLSX.utils.book_new();
 
-  const data = items.map((item, idx) => ({
-    '№': idx + 1,
-    'Услуга': item.service,
-    'Кол-во': item.count,
-    'Скидка': item.discount,
-    'Баллы': item.points,
-    'Абонементы': item.subscriptions,
-    'Сертификаты': item.certificates,
-    'Оплачено со счетов клиентов, ₽': item.clientAccounts,
-    'Оплачено деньгами, ₽': item.money,
-    'Сумма выручки': item.revenue,
-    'Доля в выручке (%)': item.revenueShare,
-    'Переменные затраты': item.variableCost,
-    'Постоянные затраты': item.fixedCost,
-    'Всего затрат': item.totalCost,
-    'Прибыль': item.profit,
-    'Рентабельность (%)': item.profitability
-  }));
+  // 1. Sheet "Отчет по залам и услугам"
+  const rows: any[] = [];
+  let rowCounter = 1;
 
-  // Append Total Row (Общий итог)
-  data.push({
-    '№': '' as any,
-    'Услуга': 'ИТОГО ПО ВСЕМ УСЛУГАМ',
+  const effectiveHalls = halls && halls.length > 0 
+    ? halls 
+    : [{ hallName: 'Все услуги', items, summary: { ...summary, totalRevenueShare: 100, area: 0, areaShare: 100, revenuePerSqM: 0, profitPerSqM: 0, masterSalary: 0, adminSalary: 0, totalSalaryCost: 0 } as any }];
+
+  effectiveHalls.forEach((hGroup) => {
+    if (hGroup.items.length === 0) return;
+
+    // Hall Section Header
+    rows.push({
+      '№': '',
+      'Зал': `=== ${hGroup.hallName.toUpperCase()} ===`,
+      'Услуга': `[ ${hGroup.items.length} услуг • Доля: ${hGroup.summary.totalRevenueShare}% • Площадь: ${hGroup.summary.area} м² ]`,
+      'Кол-во': '',
+      'Скидка': '',
+      'Баллы': '',
+      'Абонементы': '',
+      'Сертификаты': '',
+      'Оплачено со счетов клиентов, ₽': '',
+      'Оплачено деньгами, ₽': '',
+      'Сумма выручки': '',
+      'Доля в выручке (%)': '',
+      'Поставщики (материалы), ₽': '',
+      'ЗП мастеров, ₽': '',
+      'ЗП админов (доля), ₽': '',
+      'Всего ФОТ, ₽': '',
+      'Переменные затраты': '',
+      'Постоянные затраты': '',
+      'Всего затрат': '',
+      'Прибыль': '',
+      'Рентабельность (%)': ''
+    });
+
+    hGroup.items.forEach((item) => {
+      rows.push({
+        '№': rowCounter++,
+        'Зал': item.hall,
+        'Услуга': item.service,
+        'Кол-во': item.count,
+        'Скидка': item.discount,
+        'Баллы': item.points,
+        'Абонементы': item.subscriptions,
+        'Сертификаты': item.certificates,
+        'Оплачено со счетов клиентов, ₽': item.clientAccounts,
+        'Оплачено деньгами, ₽': item.money,
+        'Сумма выручки': item.revenue,
+        'Доля в выручке (%)': item.revenueShare,
+        'Поставщики (материалы), ₽': item.supplierCost,
+        'ЗП мастеров, ₽': item.masterSalary,
+        'ЗП админов (доля), ₽': item.adminSalary,
+        'Всего ФОТ, ₽': item.salaryCost,
+        'Переменные затраты': item.variableCost,
+        'Постоянные затраты': item.fixedCost,
+        'Всего затрат': item.totalCost,
+        'Прибыль': item.profit,
+        'Рентабельность (%)': item.profitability
+      });
+    });
+
+    // Hall Subtotal Row
+    rows.push({
+      '№': '',
+      'Зал': `ИТОГО ПО ЗАЛУ:`,
+      'Услуга': `${hGroup.hallName} (${hGroup.summary.area} м²)`,
+      'Кол-во': hGroup.summary.totalCount,
+      'Скидка': hGroup.summary.totalDiscount,
+      'Баллы': hGroup.summary.totalPoints,
+      'Абонементы': hGroup.summary.totalSubscriptions,
+      'Сертификаты': hGroup.summary.totalCertificates,
+      'Оплачено со счетов клиентов, ₽': hGroup.summary.totalClientAccounts,
+      'Оплачено деньгами, ₽': hGroup.summary.totalMoney,
+      'Сумма выручки': hGroup.summary.totalRevenue,
+      'Доля в выручке (%)': hGroup.summary.totalRevenueShare,
+      'Поставщики (материалы), ₽': hGroup.summary.totalSupplierCost,
+      'ЗП мастеров, ₽': hGroup.summary.masterSalary,
+      'ЗП админов (доля), ₽': hGroup.summary.adminSalary,
+      'Всего ФОТ, ₽': hGroup.summary.totalSalaryCost,
+      'Переменные затраты': hGroup.summary.totalVariableCost,
+      'Постоянные затраты': hGroup.summary.totalFixedCost,
+      'Всего затрат': hGroup.summary.totalCost,
+      'Прибыль': hGroup.summary.totalProfit,
+      'Рентабельность (%)': hGroup.summary.totalProfitability
+    });
+
+    // Empty separator row
+    rows.push({});
+  });
+
+  // Grand Total Row
+  rows.push({
+    '№': '∑',
+    'Зал': 'ОБЩИЙ ИТОГ',
+    'Услуга': `ИТОГО ПО ВСЕМ ЗАЛАМ (Площадь: ${summary.totalArea || 0} м²)`,
     'Кол-во': summary.totalCount,
     'Скидка': summary.totalDiscount,
     'Баллы': summary.totalPoints,
@@ -2153,6 +2448,10 @@ export function downloadServicesSpreadsheet(
     'Оплачено деньгами, ₽': summary.totalMoney,
     'Сумма выручки': summary.totalRevenue,
     'Доля в выручке (%)': 100,
+    'Поставщики (материалы), ₽': summary.totalSupplierCost,
+    'ЗП мастеров, ₽': summary.totalMasterSalary,
+    'ЗП админов (доля), ₽': summary.totalAdminSalary,
+    'Всего ФОТ, ₽': summary.totalSalaryCost,
     'Переменные затраты': summary.totalVariableCost,
     'Постоянные затраты': summary.totalFixedCost,
     'Всего затрат': summary.totalCost,
@@ -2160,10 +2459,11 @@ export function downloadServicesSpreadsheet(
     'Рентабельность (%)': summary.totalProfitability
   });
 
-  const ws = XLSX.utils.json_to_sheet(data);
+  const ws = XLSX.utils.json_to_sheet(rows);
   ws['!cols'] = [
     { wch: 6 },
-    { wch: 38 },
+    { wch: 28 },
+    { wch: 42 },
     { wch: 10 },
     { wch: 14 },
     { wch: 12 },
@@ -2173,6 +2473,10 @@ export function downloadServicesSpreadsheet(
     { wch: 22 },
     { wch: 16 },
     { wch: 18 },
+    { wch: 24 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
     { wch: 20 },
     { wch: 20 },
     { wch: 16 },
@@ -2180,7 +2484,160 @@ export function downloadServicesSpreadsheet(
     { wch: 18 }
   ];
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Отчет по услугам');
+  XLSX.utils.book_append_sheet(wb, ws, 'Отчет по залам и услугам');
+
+  // 2. Additional Summary Sheet "Сводка по залам"
+  if (halls && halls.length > 0) {
+    const summaryRows = halls.map((h, i) => ({
+      '№': i + 1,
+      'Зал': h.hallName,
+      'Площадь зала, м²': h.summary.area,
+      'Доля площади (%)': h.summary.areaShare,
+      'Позиций услуг': h.items.length,
+      'Количество операций': h.summary.totalCount,
+      'Скидка, ₽': h.summary.totalDiscount,
+      'Выручка, ₽': h.summary.totalRevenue,
+      'Доля выручки (%)': h.summary.totalRevenueShare,
+      'Выручка на 1 м², ₽/м²': h.summary.revenuePerSqM,
+      'Прямые поставщики, ₽': h.summary.directSupplierCost,
+      'Общие поставщики (доля), ₽': h.summary.sharedSupplierCost,
+      'Всего поставщики, ₽': h.summary.totalSupplierCost,
+      'ЗП мастеров зала, ₽': h.summary.masterSalary,
+      'ЗП администраторов (доля), ₽': h.summary.adminSalary,
+      'Всего ФОТ зала, ₽': h.summary.totalSalaryCost,
+      'Переменные затраты, ₽': h.summary.totalVariableCost,
+      'Постоянные затраты, ₽': h.summary.totalFixedCost,
+      'Всего затрат, ₽': h.summary.totalCost,
+      'Прибыль, ₽': h.summary.totalProfit,
+      'Прибыль на 1 м², ₽/м²': h.summary.profitPerSqM,
+      'Рентабельность (%)': h.summary.totalProfitability
+    }));
+
+    summaryRows.push({
+      '№': '' as any,
+      'Зал': 'ИТОГО ПО ВСЕМ ЗАЛАМ',
+      'Площадь зала, м²': summary.totalArea || 0,
+      'Доля площади (%)': 100,
+      'Позиций услуг': items.length,
+      'Количество операций': summary.totalCount,
+      'Скидка, ₽': summary.totalDiscount,
+      'Выручка, ₽': summary.totalRevenue,
+      'Доля выручки (%)': 100,
+      'Выручка на 1 м², ₽/м²': (summary.totalArea && summary.totalArea > 0) ? parseFloat((summary.totalRevenue / summary.totalArea).toFixed(2)) : 0,
+      'Прямые поставщики, ₽': halls.reduce((s, h) => s + h.summary.directSupplierCost, 0),
+      'Общие поставщики (доля), ₽': halls.reduce((s, h) => s + h.summary.sharedSupplierCost, 0),
+      'Всего поставщики, ₽': summary.totalSupplierCost,
+      'ЗП мастеров зала, ₽': summary.totalMasterSalary,
+      'ЗП администраторов (доля), ₽': summary.totalAdminSalary,
+      'Всего ФОТ зала, ₽': summary.totalSalaryCost,
+      'Переменные затраты, ₽': summary.totalVariableCost,
+      'Постоянные затраты, ₽': summary.totalFixedCost,
+      'Всего затрат, ₽': summary.totalCost,
+      'Прибыль, ₽': summary.totalProfit,
+      'Прибыль на 1 м², ₽/м²': (summary.totalArea && summary.totalArea > 0) ? parseFloat((summary.totalProfit / summary.totalArea).toFixed(2)) : 0,
+      'Рентабельность (%)': summary.totalProfitability
+    });
+
+    const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+    wsSummary['!cols'] = [
+      { wch: 6 },
+      { wch: 32 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 26 },
+      { wch: 20 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 22 },
+      { wch: 18 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Сводка по залам');
+  }
+
+  // 3. Dedicated Sheet: "Поставщики по залам (Регламент)"
+  if (suppliersBreakdown && suppliersBreakdown.items.length > 0) {
+    const suppliersSheetRows: any[] = [];
+    suppliersBreakdown.hallSuppliersSummary.forEach((hSum) => {
+      suppliersSheetRows.push({
+        'Зал / Категория регламента': `=== ${hSum.hallName} ===`,
+        'Поставщик / Статья расходов': `Прямые: ${hSum.directCost.toLocaleString('ru-RU')} ₽ | Доля общих: ${hSum.allocatedSharedCost.toLocaleString('ru-RU')} ₽`,
+        'Сумма расходов, ₽': hSum.totalSupplierCost,
+        'Тип распределения': 'Итого по залу'
+      });
+
+      hSum.items.forEach((item, idx) => {
+        suppliersSheetRows.push({
+          'Зал / Категория регламента': `  ${idx + 1}. ${hSum.hallName}`,
+          'Поставщик / Статья расходов': item.supplierName,
+          'Сумма расходов, ₽': item.amount,
+          'Тип распределения': 'Прямой поставщик зала'
+        });
+      });
+
+      suppliersSheetRows.push({});
+    });
+
+    // Shared items
+    const sharedItems = suppliersBreakdown.items.filter(it => it.targetHall === 'распределяются между всеми');
+    if (sharedItems.length > 0) {
+      suppliersSheetRows.push({
+        'Зал / Категория регламента': '=== РАСПРЕДЕЛЯЮТСЯ МЕЖДУ ВСЕМИ ЗАЛАМИ ===',
+        'Поставщик / Статья расходов': `Всего общих: ${suppliersBreakdown.sharedTotal.toLocaleString('ru-RU')} ₽ (распределены пропорционально выручке)`,
+        'Сумма расходов, ₽': suppliersBreakdown.sharedTotal,
+        'Тип распределения': 'Общие закупки'
+      });
+      sharedItems.forEach((it, idx) => {
+        suppliersSheetRows.push({
+          'Зал / Категория регламента': `  ${idx + 1}. Общие поставщики`,
+          'Поставщик / Статья расходов': it.supplierName,
+          'Сумма расходов, ₽': it.amount,
+          'Тип распределения': 'Распределяются между всеми'
+        });
+      });
+      suppliersSheetRows.push({});
+    }
+
+    // Goods items
+    const goodsItems = suppliersBreakdown.items.filter(it => it.targetHall === 'товары');
+    if (goodsItems.length > 0) {
+      suppliersSheetRows.push({
+        'Зал / Категория регламента': '=== ТОВАРЫ НА ПРОДАЖУ (ВИТРИНА) ===',
+        'Поставщик / Статья расходов': `Всего: ${suppliersBreakdown.goodsTotal.toLocaleString('ru-RU')} ₽`,
+        'Сумма расходов, ₽': suppliersBreakdown.goodsTotal,
+        'Тип распределения': 'Товары витрина'
+      });
+      goodsItems.forEach((it, idx) => {
+        suppliersSheetRows.push({
+          'Зал / Категория регламента': `  ${idx + 1}. Витрина / Украшения`,
+          'Поставщик / Статья расходов': it.supplierName,
+          'Сумма расходов, ₽': it.amount,
+          'Тип распределения': 'Товары на продажу'
+        });
+      });
+    }
+
+    const wsSuppliers = XLSX.utils.json_to_sheet(suppliersSheetRows);
+    wsSuppliers['!cols'] = [
+      { wch: 38 },
+      { wch: 55 },
+      { wch: 22 },
+      { wch: 26 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSuppliers, 'Поставщики по залам');
+  }
+
   XLSX.writeFile(wb, fileName);
 }
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Calendar, CheckCircle2, RotateCcw, HelpCircle } from 'lucide-react';
+import { Calendar, CheckCircle2, RotateCcw, HelpCircle, Building2 } from 'lucide-react';
 import { parseDate, processSalaryPayments, parseNumber, isTotalSummaryRow } from '../processingEngine';
+import { classifyServiceHall, HALL_METADATA, HallName } from '../hallsClassifier';
 import { RawRecord } from '../types';
 
 interface TestScenario {
@@ -471,6 +472,56 @@ export default function TestPlayground() {
                       <CheckCircle2 className="w-3 h-3" /> OK
                     </span>
                   )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Salon Halls Grouping & Classification Verification */}
+      <div className="mt-8 pt-6 border-t border-gray-100">
+        <h4 className="font-sans font-semibold text-sm text-gray-950 tracking-tight flex items-center gap-2 mb-2">
+          <Building2 className="w-4 h-4 text-indigo-600" />
+          Проверка классификатора: Распределение услуг по залам салона красоты
+        </h4>
+        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+          Все услуги из загруженного файла автоматически сопоставляются с соответствующим залом (<strong>«Зал колористики/парикмахеры»</strong>, <strong>«Зал макияжей и укладок»</strong>, <strong>«Зал ногтевого сервиса»</strong>, <strong>«Зал бровей»</strong>, <strong>«Мужской зал»</strong>) на основе точного справочника услуг салона и контекстных правил классификации.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {[
+            { service: 'Сложное окрашивание (Airtouch)', expectedHall: 'Зал колористики/парикмахеры' },
+            { service: 'Макияж вечерний / никах', expectedHall: 'Зал макияжей и укладок' },
+            { service: 'Маникюр + покрытие прозрачным лаком', expectedHall: 'Зал ногтевого сервиса' },
+            { service: 'Ламинирование ресниц', expectedHall: 'Зал бровей' },
+            { service: 'Стрижка мужская американ крю', expectedHall: 'Мужской зал' }
+          ].map((item, idx) => {
+            const classified = classifyServiceHall(item.service);
+            const isMatch = classified === item.expectedHall;
+            const meta = HALL_METADATA[classified as HallName] || HALL_METADATA['Прочие услуги'];
+
+            return (
+              <div key={`hall_test_${idx}`} className="p-3 bg-gray-50 hover:bg-gray-50/80 rounded-xl border border-gray-150 flex flex-col justify-between gap-2">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-gray-400">Наименование услуги:</div>
+                  <div className="text-xs font-bold text-gray-900 mt-0.5 line-clamp-2" title={item.service}>
+                    «{item.service}»
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 pt-2 flex flex-col gap-1">
+                  <div className="text-[10px] text-gray-400">Определенный зал:</div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${meta.badgeBg} ${meta.badgeText} border ${meta.badgeBorder}`}>
+                      {classified}
+                    </span>
+                    {isMatch && (
+                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5 shrink-0">
+                        <CheckCircle2 className="w-3 h-3" /> OK
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
