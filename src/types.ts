@@ -16,6 +16,7 @@ export interface RevenueItemDetail {
   count: number; // Количество сгруппированных строк
   category: string; // Категория (Выручка с услуг, Выручка с товаров и т.д.)
   transactions: RawRecord[];
+  hall?: string; // Название зала салона
 }
 
 export interface MetricRow {
@@ -117,6 +118,8 @@ export interface ServicesReportResult {
   summary: ServicesReportSummary;
 }
 
+export type ExpenseAllocationMethod = 'revenue' | 'area';
+
 export interface ServicesReportSummary {
   totalCount: number;
   totalDiscount: number;
@@ -136,6 +139,7 @@ export interface ServicesReportSummary {
   totalCost: number;
   totalProfit: number;
   totalProfitability: number;
+  expenseAllocationMethod?: ExpenseAllocationMethod;
 }
 
 export interface ServicesPreprocessingStats {

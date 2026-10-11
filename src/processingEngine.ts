@@ -10,7 +10,8 @@ import {
   ServicesReportSummary,
   ServicesPreprocessingStats,
   HallReportGroup,
-  ServicesReportResult
+  ServicesReportResult,
+  ExpenseAllocationMethod
 } from './types';
 import { classifyServiceHall, HALL_NAMES, HallName } from './hallsClassifier';
 import { FINANCIAL_TEMPLATE } from './financialTemplate';
@@ -621,7 +622,10 @@ export function getReverseMatchingScore(srcCategory: string, tgtLabel: string): 
 }
 
 // Group and sum records by "Услуга/Товар" for the revenue detailing
-export function groupRevenueByServiceProduct(records: RawRecord[]): RevenueItemDetail[] {
+export function groupRevenueByServiceProduct(
+  records: RawRecord[],
+  serviceHallOverrides: Record<string, HallName> = {}
+): RevenueItemDetail[] {
   const revenueCategories = [
     'выручка общая',
     'выручка с услуг',
@@ -696,7 +700,8 @@ export function groupRevenueByServiceProduct(records: RawRecord[]): RevenueItemD
     sum: parseFloat(item.sum.toFixed(2)),
     count: item.count,
     category: item.category,
-    transactions: item.transactions
+    transactions: item.transactions,
+    hall: classifyServiceHall(item.canonicalName, serviceHallOverrides)
   }));
 
   // Sort by sum descending
@@ -1426,7 +1431,8 @@ export function generateFinancialReport(
   userOverrides: Record<number, number> = {},
   categoryMappings: Record<string, string> = {},
   transactionMappings: Record<string, string> = {},
-  fileName?: string | null
+  fileName?: string | null,
+  serviceHallOverrides: Record<string, HallName> = {}
 ): { 
   report: MetricRow[]; 
   extraRows: { label: string; value: number; transactions: RawRecord[] }[]; 
@@ -1584,7 +1590,7 @@ export function generateFinancialReport(
   // 5. Build Revenue Detailing by grouping and summing "Услуга/Товар"
   finalReport.forEach((row) => {
     if (row.index >= 1 && row.index <= 7 && row.transactions && row.transactions.length > 0) {
-      row.revenueDetails = groupRevenueByServiceProduct(row.transactions);
+      row.revenueDetails = groupRevenueByServiceProduct(row.transactions, serviceHallOverrides);
     }
   });
 
@@ -1593,7 +1599,8 @@ export function generateFinancialReport(
     .flatMap(r => r.transactions || []);
   
   const totalRevenueDetails = groupRevenueByServiceProduct(
-    allRevenueTransactions.length > 0 ? allRevenueTransactions : filteredRecords.filter(r => r.sum > 0)
+    allRevenueTransactions.length > 0 ? allRevenueTransactions : filteredRecords.filter(r => r.sum > 0),
+    serviceHallOverrides
   );
 
   if (finalReport[0]) {
@@ -1762,6 +1769,7 @@ export function downloadFinancialSpreadsheet(
     const revSheetData = revenueDetails.map((item, idx) => ({
       '№': idx + 1,
       'Услуга / Товар': item.name,
+      'Зал салона': item.hall || 'Прочие услуги',
       'Категория': item.category,
       'Количество операций': item.count,
       'Сумма (₽)': item.sum,
@@ -1772,6 +1780,7 @@ export function downloadFinancialSpreadsheet(
     wsRev['!cols'] = [
       { wch: 6 },
       { wch: 45 },
+      { wch: 28 },
       { wch: 25 },
       { wch: 22 },
       { wch: 18 },
@@ -1791,6 +1800,7 @@ export function downloadRevenueSpreadsheet(revenueDetails: RevenueItemDetail[], 
   const data = revenueDetails.map((item, idx) => ({
     '№': idx + 1,
     'Услуга / Товар': item.name,
+    'Зал салона': item.hall || 'Прочие услуги',
     'Категория': item.category,
     'Количество операций': item.count,
     'Сумма (₽)': item.sum,
@@ -1801,6 +1811,7 @@ export function downloadRevenueSpreadsheet(revenueDetails: RevenueItemDetail[], 
   ws['!cols'] = [
     { wch: 6 },
     { wch: 45 },
+    { wch: 28 },
     { wch: 25 },
     { wch: 22 },
     { wch: 18 },
@@ -2034,7 +2045,9 @@ export function generateServicesReport(
   customSupplierExpenses: number = 0,
   hallMastersSalaries: Record<string, number> = {},
   adminSalaryTotal: number = 0,
-  hallAreas: Record<string, number> = {}
+  hallAreas: Record<string, number> = {},
+  serviceHallOverrides: Record<string, HallName> = {},
+  expenseAllocationMethod: ExpenseAllocationMethod = 'revenue'
 ): ServicesReportResult & { suppliersBreakdown: SuppliersAllocationBreakdown } {
   const map = new Map<string, {
     canonicalName: string;
@@ -2102,7 +2115,7 @@ export function generateServicesReport(
     totalMoney += item.money;
     totalCount += item.count;
 
-    const h = classifyServiceHall(item.canonicalName);
+    const h = classifyServiceHall(item.canonicalName, serviceHallOverrides);
     hallRevenues[h] = (hallRevenues[h] || 0) + item.revenue;
   });
 
@@ -2127,40 +2140,78 @@ export function generateServicesReport(
   const absFixed = Math.abs(totalFixedExpenses);
   const absAdminSalary = Math.abs(adminSalaryTotal);
 
-  // Pre-calculate per-hall salaries:
+  // Calculate eligible area sum for halls that have revenue
+  // "При способе распределения затрат пропорционально площади при отсутствии выручки по данному залу затраты на него не распределяются."
+  const eligibleAreaForHallsWithRevenue = HALL_NAMES.reduce((sum, hName) => {
+    const hRev = hallRevenues[hName] || 0;
+    if (hRev > 0) {
+      return sum + Math.max(0, hallAreas[hName] || 0);
+    }
+    return sum;
+  }, 0);
+
+  // Pre-calculate per-hall salaries & expenses:
   // - Зарплата мастеров: строго в сумме, введенной для каждого зала
-  // - Зарплата административного персонала: распределяется между всеми залами пропорционально выручке
+  // - Затраты (переменные, постоянные, ЗП админов):
+  //   либо пропорционально выручке, либо пропорционально площади залов.
+  //   При распределении по площади, если по залу нет выручки, затраты на него = 0.
   const hallMasterSalariesMap = new Map<string, number>();
   const hallAdminSalariesMap = new Map<string, number>();
+  const hallVarCostMap = new Map<string, number>();
+  const hallFixCostMap = new Map<string, number>();
 
   HALL_NAMES.forEach((hName) => {
     const hRev = hallRevenues[hName] || 0;
+    const hArea = Math.max(0, hallAreas[hName] || 0);
     const hMasterSal = Math.abs(hallMastersSalaries[hName] || 0);
-    const hAdminSal = totalRevenue > 0 
-      ? parseFloat((absAdminSalary * (hRev / totalRevenue)).toFixed(2)) 
-      : parseFloat((absAdminSalary / 5).toFixed(2));
-    
     hallMasterSalariesMap.set(hName, hMasterSal);
+
+    let hallCostShare = 0;
+    if (expenseAllocationMethod === 'area') {
+      if (hRev > 0 && eligibleAreaForHallsWithRevenue > 0) {
+        hallCostShare = hArea / eligibleAreaForHallsWithRevenue;
+      } else if (hRev > 0 && eligibleAreaForHallsWithRevenue === 0 && totalRevenue > 0) {
+        // Fallback to revenue share if no areas entered yet
+        hallCostShare = hRev / totalRevenue;
+      } else {
+        // Zero cost allocated if hall has no revenue
+        hallCostShare = 0;
+      }
+    } else {
+      // By revenue
+      hallCostShare = totalRevenue > 0 
+        ? (hRev / totalRevenue) 
+        : (1 / 5);
+    }
+
+    const hAdminSal = parseFloat((absAdminSalary * hallCostShare).toFixed(2));
+    const hVarCost = parseFloat((absVariable * hallCostShare).toFixed(2));
+    const hFixCost = parseFloat((absFixed * hallCostShare).toFixed(2));
+
     hallAdminSalariesMap.set(hName, hAdminSal);
+    hallVarCostMap.set(hName, hVarCost);
+    hallFixCostMap.set(hName, hFixCost);
   });
 
   const items: ServiceReportItem[] = Array.from(map.values()).map((item) => {
-    const hall = classifyServiceHall(item.canonicalName);
+    const hall = classifyServiceHall(item.canonicalName, serviceHallOverrides);
     const hallTotalRev = hallRevenues[hall] || 0;
     const hallSupplierCost = hallSuppliersMap.get(hall) || 0;
     const hallMasterSalary = hallMasterSalariesMap.get(hall) || 0;
     const hallAdminSalary = hallAdminSalariesMap.get(hall) || 0;
+    const hallVarCost = hallVarCostMap.get(hall) || 0;
+    const hallFixCost = hallFixCostMap.get(hall) || 0;
     
-    // Внутри зала расходы на поставщиков и зарплату распределяются пропорционально выручке услуги в данном зале
+    // Внутри зала расходы на поставщиков, зарплату, переменные и постоянные затраты распределяются пропорционально выручке услуги в данном зале
     const hallShare = hallTotalRev > 0 ? (item.revenue / hallTotalRev) : 0;
     const supplierCost = parseFloat((hallSupplierCost * hallShare).toFixed(2));
     const masterSalary = parseFloat((hallMasterSalary * hallShare).toFixed(2));
     const adminSalary = parseFloat((hallAdminSalary * hallShare).toFixed(2));
     const salaryCost = parseFloat((masterSalary + adminSalary).toFixed(2));
+    const variableCost = parseFloat((hallVarCost * hallShare).toFixed(2));
+    const fixedCost = parseFloat((hallFixCost * hallShare).toFixed(2));
 
     const share = totalRevenue > 0 ? (item.revenue / totalRevenue) : 0;
-    const variableCost = parseFloat((absVariable * share).toFixed(2));
-    const fixedCost = parseFloat((absFixed * share).toFixed(2));
     const totalCost = parseFloat((supplierCost + salaryCost + variableCost + fixedCost).toFixed(2));
     const profit = parseFloat((item.revenue - totalCost).toFixed(2));
     const profitability = item.revenue > 0 ? parseFloat(((profit / item.revenue) * 100).toFixed(2)) : 0;
@@ -2217,8 +2268,6 @@ export function generateServicesReport(
       let hMoney = 0;
       let hRevenue = 0;
       let hSuppCost = 0;
-      let hVarCost = 0;
-      let hFixCost = 0;
 
       hallItems.forEach((it) => {
         hCount += it.count;
@@ -2230,8 +2279,6 @@ export function generateServicesReport(
         hMoney += it.money;
         hRevenue += it.revenue;
         hSuppCost += it.supplierCost;
-        hVarCost += it.variableCost;
-        hFixCost += it.fixedCost;
       });
 
       const summaryForHall = suppliersBreakdown.hallSuppliersSummary.find(s => s.hallName === hName);
@@ -2242,6 +2289,9 @@ export function generateServicesReport(
       const hMasterSal = hallMasterSalariesMap.get(hName) || 0;
       const hAdminSal = hallAdminSalariesMap.get(hName) || 0;
       const hTotalSal = parseFloat((hMasterSal + hAdminSal).toFixed(2));
+
+      const hVarCost = hallVarCostMap.get(hName) || 0;
+      const hFixCost = hallFixCostMap.get(hName) || 0;
 
       const hArea = hallAreas[hName] || 0;
       const hAreaShare = totalArea > 0 ? parseFloat(((hArea / totalArea) * 100).toFixed(1)) : 0;
@@ -2327,7 +2377,8 @@ export function generateServicesReport(
     totalFixedCost: absFixed,
     totalCost,
     totalProfit,
-    totalProfitability
+    totalProfitability,
+    expenseAllocationMethod
   };
 
   return { items, halls, summary, suppliersBreakdown };

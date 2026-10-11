@@ -192,11 +192,12 @@ export async function downloadDocxReport(
     );
 
     revDetails.forEach((item) => {
+      const hallLabel = item.hall && item.hall !== 'Прочие услуги' ? ` [${item.hall}]` : '';
       revenueDetailParagraphs.push(
         new Paragraph({
           children: [
             new TextRun({
-              text: `  • ${item.name} : ${formatNum(item.sum)} ₽ (${item.count} оп.)`,
+              text: `  • ${item.name}${hallLabel} : ${formatNum(item.sum)} ₽ (${item.count} оп.)`,
               size: 20,
               font: "Calibri",
               color: "555555"

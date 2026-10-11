@@ -39,7 +39,9 @@ import {
   SlidersHorizontal,
   Sparkles,
   Building2,
-  ChevronRight
+  ChevronRight,
+  Settings2,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -53,7 +55,8 @@ import {
   ServiceReportItem,
   ServicesReportSummary,
   ServicesPreprocessingStats,
-  HallReportGroup
+  HallReportGroup,
+  ExpenseAllocationMethod
 } from './types';
 import { 
   parseUploadedSpreadsheet, 
@@ -274,8 +277,38 @@ const DEMO_SERVICES_RECORDS: Omit<RawServiceRecord, 'id' | 'revenue'>[] = [
   // Мужской зал
   { rawIndex: 19, service: 'Стрижка мужская Fade / Кроп', discount: 0, points: 100, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1900 },
   { rawIndex: 20, service: 'Стрижка мужская Fade / Кроп', discount: 200, points: 0, subscriptions: 0, certificates: 0, clientAccounts: 500, money: 1300 },
-  { rawIndex: 21, service: 'Оформление бороды', discount: 0, points: 50, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1150 }
+  { rawIndex: 21, service: 'Оформление бороды', discount: 0, points: 50, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 1150 },
+
+  // Прочие услуги (для демонстрации отнесения услуг к залам салона с запоминанием выбора)
+  { rawIndex: 22, service: 'Аренда рабочего места (коворкинг мастера)', discount: 0, points: 0, subscriptions: 0, certificates: 0, clientAccounts: 0, money: 3500 },
+  { rawIndex: 23, service: 'Консультация трихолога с микровидеодиагностикой', discount: 200, points: 100, subscriptions: 0, certificates: 0, clientAccounts: 500, money: 2500 },
+  { rawIndex: 24, service: 'Сервисный сбор и сопровождение VIP-гостя', discount: 0, points: 0, subscriptions: 0, certificates: 1000, clientAccounts: 0, money: 1500 }
 ];
+
+const STORAGE_KEY_HALL_OVERRIDES = 'salon_service_hall_overrides';
+
+function loadSavedHallOverrides(): Record<string, HallName> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_HALL_OVERRIDES);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return parsed as Record<string, HallName>;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load saved hall overrides', e);
+  }
+  return {};
+}
+
+function saveHallOverrides(overrides: Record<string, HallName>) {
+  try {
+    localStorage.setItem(STORAGE_KEY_HALL_OVERRIDES, JSON.stringify(overrides));
+  } catch (e) {
+    console.error('Failed to save hall overrides', e);
+  }
+}
 
 export default function App() {
   // Primary top-level navigation: Tab 1 (Финансовый отчет) vs Tab 2 (Отчет по услугам)
@@ -321,27 +354,74 @@ export default function App() {
   const [selectedHallFilter, setSelectedHallFilter] = useState<string>('all');
   const [collapsedHalls, setCollapsedHalls] = useState<Record<string, boolean>>({});
   
-  // Hall Areas & Salaries State (Tab 2)
+  // Hall Areas & Salaries State (Tab 2) - initial values cleared of demo data
   const [hallAreas, setHallAreas] = useState<Record<string, number>>({
-    'Зал колористики/парикмахеры': 45,
-    'Зал макияжей и укладок': 20,
-    'Зал ногтевого сервиса': 25,
-    'Зал бровей': 15,
-    'Мужской зал': 20,
+    'Зал колористики/парикмахеры': 0,
+    'Зал макияжей и укладок': 0,
+    'Зал ногтевого сервиса': 0,
+    'Зал бровей': 0,
+    'Мужской зал': 0,
     'Прочие услуги': 0
   });
   const [hallMastersSalaries, setHallMastersSalaries] = useState<Record<string, number>>({
-    'Зал колористики/парикмахеры': 210000,
-    'Зал макияжей и укладок': 85000,
-    'Зал ногтевого сервиса': 95000,
-    'Зал бровей': 45000,
-    'Мужской зал': 75000,
+    'Зал колористики/парикмахеры': 0,
+    'Зал макияжей и укладок': 0,
+    'Зал ногтевого сервиса': 0,
+    'Зал бровей': 0,
+    'Мужской зал': 0,
     'Прочие услуги': 0
   });
-  const [serviceAdminSalary, setServiceAdminSalary] = useState<number>(85000);
+  const [serviceAdminSalary, setServiceAdminSalary] = useState<number>(0);
+  // Cost allocation method: 'revenue' (пропорционально выручке) or 'area' (пропорционально площади залов)
+  const [expenseAllocationMethod, setExpenseAllocationMethod] = useState<ExpenseAllocationMethod>('revenue');
   const [collapsedRevenueDetails, setCollapsedRevenueDetails] = useState<Record<number, boolean>>({});
   const [customAdminSalary, setCustomAdminSalary] = useState<string>('');
+  const [serviceHallOverrides, setServiceHallOverrides] = useState<Record<string, HallName>>(() => loadSavedHallOverrides());
+  const [showHallOverridesModal, setShowHallOverridesModal] = useState<boolean>(false);
   const servicesFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Handlers for assigning services from "Прочие услуги" to a hall with persistence
+  const handleAssignServiceToHall = (serviceName: string, targetHall: HallName) => {
+    setServiceHallOverrides(prev => {
+      let next: Record<string, HallName>;
+      if (targetHall === 'Прочие услуги') {
+        next = { ...prev };
+        delete next[serviceName];
+      } else {
+        next = { ...prev, [serviceName]: targetHall };
+      }
+      saveHallOverrides(next);
+      return next;
+    });
+    setNotification({
+      status: 'success',
+      message: targetHall === 'Прочие услуги'
+        ? `Услуга «${serviceName}» возвращена в категорию «Прочие услуги».`
+        : `Услуга «${serviceName}» успешно отнесена к залу «${targetHall}». Выбор сохранен и применен во всех отчетах!`
+    });
+  };
+
+  const handleResetServiceHall = (serviceName: string) => {
+    setServiceHallOverrides(prev => {
+      const next = { ...prev };
+      delete next[serviceName];
+      saveHallOverrides(next);
+      return next;
+    });
+    setNotification({
+      status: 'success',
+      message: `Сброшено ручное назначение зала для «${serviceName}».`
+    });
+  };
+
+  const handleClearAllHallOverrides = () => {
+    setServiceHallOverrides({});
+    saveHallOverrides({});
+    setNotification({
+      status: 'success',
+      message: 'Все сохраненные ручные назначения услуг по залам успешно сброшены.'
+    });
+  };
 
   // Staging and processing states
   const [stagedRecords, setStagedRecords] = useState<RawRecord[]>([]);
@@ -551,8 +631,8 @@ export default function App() {
 
   // Processing results: Financial Report
   const financialResults = useMemo(() => {
-    return generateFinancialReport(rawRecords, effectiveUserOverrides, categoryMappings, transactionMappings, fileName);
-  }, [rawRecords, effectiveUserOverrides, categoryMappings, transactionMappings, fileName]);
+    return generateFinancialReport(rawRecords, effectiveUserOverrides, categoryMappings, transactionMappings, fileName, serviceHallOverrides);
+  }, [rawRecords, effectiveUserOverrides, categoryMappings, transactionMappings, fileName, serviceHallOverrides]);
 
   const { report: financialReport, extraRows, revenueDetails } = financialResults;
 
@@ -757,7 +837,7 @@ export default function App() {
     return 0;
   }, [isServicesCustomExpensesActive, customSupplierExpenses]);
 
-  // Main Services Report Generation with supplier distribution according to regulation table, hall salaries and areas
+  // Main Services Report Generation with supplier distribution according to regulation table, hall salaries, areas, and chosen expense allocation method
   const servicesReport = useMemo(() => {
     return generateServicesReport(
       servicesRecords, 
@@ -767,7 +847,9 @@ export default function App() {
       activeCustomSupplierExpenses,
       hallMastersSalaries,
       serviceAdminSalary,
-      hallAreas
+      hallAreas,
+      serviceHallOverrides,
+      expenseAllocationMethod
     );
   }, [
     servicesRecords, 
@@ -777,8 +859,16 @@ export default function App() {
     activeCustomSupplierExpenses,
     hallMastersSalaries,
     serviceAdminSalary,
-    hallAreas
+    hallAreas,
+    serviceHallOverrides,
+    expenseAllocationMethod
   ]);
+
+  // Items currently remaining in "Прочие услуги"
+  const otherServicesItems = useMemo(() => {
+    const grp = servicesReport.halls.find(h => h.hallName === 'Прочие услуги');
+    return grp ? grp.items : [];
+  }, [servicesReport]);
 
   // Filtered Services List for Search & Selected Hall
   const filteredServiceItems = useMemo(() => {
@@ -2799,9 +2889,61 @@ export default function App() {
                                     {idx + 1}
                                   </td>
                                   <td className="p-3 font-medium text-gray-850">
-                                    <div className="flex items-center gap-2">
-                                      <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
-                                      <span className="font-semibold text-gray-900">{item.name}</span>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                                        <span className="font-semibold text-gray-900">{item.name}</span>
+                                      </div>
+
+                                      {item.hall && (
+                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                          item.hall === 'Прочие услуги'
+                                            ? 'bg-amber-50 text-amber-900 border-amber-250'
+                                            : `${HALL_METADATA[item.hall as HallName]?.badgeBg || 'bg-indigo-50'} ${HALL_METADATA[item.hall as HallName]?.badgeText || 'text-indigo-800'} ${HALL_METADATA[item.hall as HallName]?.badgeBorder || 'border-indigo-200'}`
+                                        }`}>
+                                          {HALL_METADATA[item.hall as HallName]?.shortLabel || item.hall}
+                                        </span>
+                                      )}
+
+                                      {item.hall === 'Прочие услуги' && (
+                                        <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                          <select
+                                            value=""
+                                            onChange={(e) => {
+                                              if (e.target.value) {
+                                                handleAssignServiceToHall(item.name, e.target.value as HallName);
+                                              }
+                                            }}
+                                            className="text-[10px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg px-2 py-0.5 outline-none cursor-pointer shadow-2xs"
+                                            title="Отнести эту позицию к одному из залов салона с сохранением выбора"
+                                          >
+                                            <option value="">➡️ Отнести к залу...</option>
+                                            {HALL_NAMES.filter(h => h !== 'Прочие услуги').map(h => (
+                                              <option key={`tab3_opt_${item.name}_${h}`} value={h}>
+                                                {h}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      )}
+
+                                      {serviceHallOverrides[item.name] && (
+                                        <div 
+                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9.5px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200" 
+                                          onClick={(e) => e.stopPropagation()}
+                                          title={`Назначено пользователем в «${serviceHallOverrides[item.name]}». Сохранено в браузере.`}
+                                        >
+                                          <span>✏️ Вручную</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleResetServiceHall(item.name)}
+                                            className="text-indigo-400 hover:text-rose-600 transition-colors ml-0.5 cursor-pointer font-bold"
+                                            title="Сбросить назначение"
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
                                   </td>
                                   <td className="p-3">
@@ -3112,7 +3254,13 @@ export default function App() {
               )}
               {servicesRecords.length > 0 && (
                 <button
-                  onClick={() => downloadServicesSpreadsheet(servicesReport.items, servicesReport.summary, servicesFileName ? `Отчет_${servicesFileName}` : 'Отчет_по_услугам.xlsx')}
+                  onClick={() => downloadServicesSpreadsheet(
+                    servicesReport.items, 
+                    servicesReport.summary, 
+                    servicesFileName ? `Отчет_${servicesFileName}` : 'Отчет_по_услугам.xlsx',
+                    servicesReport.halls,
+                    servicesReport.suppliersBreakdown
+                  )}
                   className="px-4 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer whitespace-nowrap"
                   title="Скачать сформированный отчет по услугам в Excel"
                 >
@@ -3577,6 +3725,57 @@ export default function App() {
             </div>
           </div>
 
+          {/* Cost Allocation Method Selector */}
+          <div className="bg-gradient-to-r from-indigo-50/70 via-slate-50 to-white rounded-2xl p-4 border border-indigo-200/90 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-lg shrink-0 shadow-2xs">
+                <SlidersHorizontal className="w-5 h-5 text-indigo-700" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-gray-900 uppercase tracking-wide">
+                    Способ распределения затрат по залам
+                  </span>
+                  <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full border border-indigo-200">
+                    Переменные, постоянные расходы и ЗП админов
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
+                  {expenseAllocationMethod === 'revenue' 
+                    ? 'Текущий режим: Пропорционально выручке. Все общие затраты распределяются между залами салона строго пропорционально их доле в общей выручке.'
+                    : 'Текущий режим: Пропорционально площади залов. Затраты распределяются согласно площади залов (м²). Если по залу отсутствует выручка, затраты на него не распределяются (0 ₽).'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-gray-150/80 p-1 rounded-xl shrink-0 border border-gray-250">
+              <button
+                type="button"
+                onClick={() => setExpenseAllocationMethod('revenue')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  expenseAllocationMethod === 'revenue'
+                    ? 'bg-white text-indigo-900 shadow-2xs border border-gray-200'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span>Пропорционально выручке</span>
+                {expenseAllocationMethod === 'revenue' && <Check className="w-3.5 h-3.5 text-indigo-600" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpenseAllocationMethod('area')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  expenseAllocationMethod === 'area'
+                    ? 'bg-indigo-600 text-white shadow-2xs'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span>Пропорционально площади</span>
+                {expenseAllocationMethod === 'area' && <Check className="w-3.5 h-3.5 text-white" />}
+              </button>
+            </div>
+          </div>
+
           {/* Admin Salary Distribution Banner */}
           <div className="bg-gradient-to-r from-teal-50/70 via-sky-50/40 to-white rounded-2xl p-4 border border-teal-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
             <div className="flex items-start gap-3">
@@ -3589,14 +3788,14 @@ export default function App() {
                     Зарплата административного персонала (Общий ФОТ админов)
                   </span>
                   <span className="text-[10px] font-mono bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full font-bold">
-                    Распределяется между всеми залами
+                    Распределяется между залами
                   </span>
                   <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200">
                     Передается в Финотчет
                   </span>
                 </div>
                 <p className="text-[11px] text-teal-800/80 mt-1 leading-relaxed">
-                  Введенная сумма автоматически заполняет статью «Зарплата административного персонала» в финансовом отчете и распределяется между всеми залами пропорционально доле зала в общей выручке услуг салона.
+                  Введенная сумма автоматически заполняет статью «Зарплата административного персонала» в финансовом отчете и распределяется между залами согласно выбранному способу распределения ({expenseAllocationMethod === 'revenue' ? 'пропорционально выручке' : 'пропорционально площади залов'}).
                 </p>
               </div>
             </div>
@@ -3614,14 +3813,14 @@ export default function App() {
                 />
                 <span className="absolute right-3 top-2 text-xs font-mono font-bold text-teal-600">₽</span>
               </div>
-              {serviceAdminSalary !== 85000 && (
+              {serviceAdminSalary > 0 && (
                 <button
                   type="button"
-                  onClick={() => setServiceAdminSalary(85000)}
+                  onClick={() => setServiceAdminSalary(0)}
                   className="text-[11px] font-semibold text-teal-700 hover:text-teal-950 underline cursor-pointer"
-                  title="Сбросить к исходному значению 85 000 ₽"
+                  title="Очистить значение"
                 >
-                  Сброс
+                  Очистить
                 </button>
               )}
             </div>
@@ -3723,6 +3922,11 @@ export default function App() {
                         <div className="flex justify-between items-center text-[10px] pt-1 border-t border-dashed border-gray-150">
                           <span className="text-gray-400 font-sans">Выручка / м²:</span>
                           <span className="text-emerald-800 font-semibold">{hallRep.summary.revenuePerSqM.toLocaleString('ru-RU')} ₽</span>
+                        </div>
+                      )}
+                      {expenseAllocationMethod === 'area' && hallRep.summary.totalRevenue === 0 && (
+                        <div className="pt-1 text-[10px] text-amber-800 font-sans flex items-center gap-1 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200">
+                          <span>⚠️ Нет выручки — затраты не распределяются (0 ₽)</span>
                         </div>
                       )}
                     </div>
@@ -3889,6 +4093,101 @@ export default function App() {
           </div>
         )}
 
+        {/* "Прочие услуги" Allocation Callout Banner */}
+        {otherServicesItems.length > 0 && (
+          <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-3xl p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 bg-amber-500 text-white rounded-2xl shadow-sm shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-display font-extrabold text-sm text-amber-950">
+                      «Прочие услуги» требуют распределения по залам ({otherServicesItems.length} позиций)
+                    </h3>
+                    <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                      {otherServicesItems.reduce((acc, it) => acc + it.revenue, 0).toLocaleString('ru-RU')} ₽ выручки
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-900/80 mt-1 max-w-3xl leading-relaxed">
+                    Услуги ниже не попали под стандартные правила автоопределения залов. 
+                    Выберите подходящий зал салона для каждой услуги — <strong>система запомнит ваш выбор</strong> и автоматически применит его во всех отчетах, пересчитав выручку залов, затраты на материалы и заработную плату.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setShowHallOverridesModal(true)}
+                  className="px-3.5 py-1.5 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Settings2 className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Все назначения ({Object.keys(serviceHallOverrides).length})</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Assignment Items Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pt-2 border-t border-amber-200/80">
+              {otherServicesItems.map((item) => (
+                <div 
+                  key={`other_assign_card_${item.service}`}
+                  className="bg-white rounded-2xl border border-amber-200 p-3.5 shadow-2xs flex flex-col justify-between space-y-2.5 hover:border-amber-400 transition-all"
+                >
+                  <div>
+                    <div className="font-semibold text-xs text-gray-900 leading-snug" title={item.service}>
+                      {item.service}
+                    </div>
+                    <div className="flex items-center justify-between mt-1 text-[11px] font-mono">
+                      <span className="text-gray-400">{item.count} операций</span>
+                      <strong className="text-emerald-700 font-bold">{item.revenue.toLocaleString('ru-RU')} ₽</strong>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-gray-100">
+                    <label className="text-[10px] uppercase font-bold text-gray-400 block mb-1">
+                      Отнести к залу:
+                    </label>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleAssignServiceToHall(item.service, e.target.value as HallName);
+                        }
+                      }}
+                      className="w-full text-xs font-semibold bg-amber-50/60 hover:bg-amber-50 focus:bg-white border border-amber-300 focus:border-indigo-500 rounded-xl px-2.5 py-1.5 text-gray-900 outline-none cursor-pointer"
+                    >
+                      <option value="">— Выберите зал салона —</option>
+                      {HALL_NAMES.filter(h => h !== 'Прочие услуги').map((hName) => (
+                        <option key={`opt_card_${item.service}_${hName}`} value={hName}>
+                          {hName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Success badge if all services are allocated and overrides exist */}
+        {otherServicesItems.length === 0 && Object.keys(serviceHallOverrides).length > 0 && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex items-center justify-between gap-3 text-xs text-emerald-900 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Все услуги распределены по залам салона. Активно <strong>{Object.keys(serviceHallOverrides).length}</strong> сохраненных ручных соответствий.</span>
+            </div>
+            <button
+              onClick={() => setShowHallOverridesModal(true)}
+              className="px-3 py-1 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg font-semibold text-[11px] cursor-pointer"
+            >
+              Управление соответствиями
+            </button>
+          </div>
+        )}
+
         {/* Toolbar: Hall Filters, Search and Download */}
         <div className="bg-white rounded-2xl border border-gray-150 p-4 shadow-sm space-y-3">
           {/* Hall Filter Tabs */}
@@ -3951,6 +4250,21 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end flex-wrap">
+              {/* Hall Overrides manager button */}
+              <button
+                onClick={() => setShowHallOverridesModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold cursor-pointer shadow-2xs transition-all"
+                title="Просмотр и управление сохраненными соответствиями услуг залам"
+              >
+                <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Назначения залов</span>
+                {Object.keys(serviceHallOverrides).length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-md text-[10px] bg-indigo-600 text-white font-bold font-mono">
+                    {Object.keys(serviceHallOverrides).length}
+                  </span>
+                )}
+              </button>
+
               {/* Bulk Expand / Collapse Buttons for Halls and Services */}
               <div className="flex items-center gap-1.5 flex-wrap">
                 <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-xl border border-gray-150">
@@ -4081,6 +4395,11 @@ export default function App() {
                                 <span className={`text-xs font-bold px-2.5 py-0.5 rounded-lg ${meta.badgeBg} ${meta.badgeText} border ${meta.badgeBorder}`}>
                                   {hallGroup.hallName}
                                 </span>
+                                {hallGroup.hallName === 'Прочие услуги' && hallGroup.items.length > 0 && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300">
+                                    ⚠️ Требуется отнесение к залам
+                                  </span>
+                                )}
                                 <span className="text-[11px] text-gray-500 font-medium">
                                   ({hallGroup.items.length} позиций • {hallGroup.summary.totalCount} операций)
                                 </span>
@@ -4161,9 +4480,53 @@ export default function App() {
                                   {idx + 1}
                                 </td>
                                 <td className="p-3 font-medium text-gray-900">
-                                  <div className="flex items-center gap-1.5">
-                                    <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
-                                    <span className="font-semibold text-gray-900">{item.service}</span>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <ChevronDown className={`w-3.5 h-3.5 text-indigo-500 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
+                                      <span className="font-semibold text-gray-900">{item.service}</span>
+                                    </div>
+
+                                    {/* If this service is currently in "Прочие услуги", show quick hall assignment select */}
+                                    {item.hall === 'Прочие услуги' && (
+                                      <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                        <select
+                                          value=""
+                                          onChange={(e) => {
+                                            if (e.target.value) {
+                                              handleAssignServiceToHall(item.service, e.target.value as HallName);
+                                            }
+                                          }}
+                                          className="text-[10.5px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg px-2 py-0.5 outline-none cursor-pointer shadow-2xs focus:ring-2 focus:ring-amber-400"
+                                          title="Отнести эту услугу к одному из залов салона с сохранением выбора"
+                                        >
+                                          <option value="">➡️ Отнести к залу...</option>
+                                          {HALL_NAMES.filter(h => h !== 'Прочие услуги').map(h => (
+                                            <option key={`row_opt_${item.service}_${h}`} value={h}>
+                                              {h}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
+                                    {/* If this service was manually assigned via overrides */}
+                                    {serviceHallOverrides[item.service] && (
+                                      <div 
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9.5px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200" 
+                                        onClick={(e) => e.stopPropagation()}
+                                        title={`Назначено пользователем в «${serviceHallOverrides[item.service]}». Сохранено в браузере.`}
+                                      >
+                                        <span>✏️ Назначено</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleResetServiceHall(item.service)}
+                                          className="text-indigo-400 hover:text-rose-600 transition-colors ml-0.5 cursor-pointer font-bold"
+                                          title="Сбросить ручное назначение"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 </td>
                                 <td className="p-3 text-center font-mono font-semibold text-indigo-700">
@@ -4447,6 +4810,107 @@ export default function App() {
         </div>
       </div>
     )}
+
+      {/* Modal: Hall Overrides Management */}
+      {showHallOverridesModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full border border-gray-200 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="p-5 bg-gray-50 border-b border-gray-150 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-extrabold text-sm text-gray-900">
+                    Соответствия услуг залам салона ({Object.keys(serviceHallOverrides).length})
+                  </h3>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Все сделанные выборы сохраняются в браузере и используются при формировании всех отчетов
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowHallOverridesModal(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-200 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto space-y-3 flex-1">
+              {Object.keys(serviceHallOverrides).length === 0 ? (
+                <div className="text-center py-12 text-gray-400 text-xs space-y-2">
+                  <Building2 className="w-8 h-8 text-gray-300 mx-auto" />
+                  <p className="font-semibold text-gray-600">Нет сохраненных ручных назначений</p>
+                  <p className="text-[11px] max-w-sm mx-auto">
+                    Когда вы относите услугу из «Прочие услуги» к одному из залов, она сохраняется здесь и автоматически учитывается при следующих расчетах.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-100 border border-gray-150 rounded-2xl overflow-hidden shadow-2xs">
+                  {Object.entries(serviceHallOverrides).map(([svcName, hall]) => {
+                    const meta = HALL_METADATA[hall as HallName] || HALL_METADATA['Прочие услуги'];
+                    return (
+                      <div key={`override_item_${svcName}`} className="p-3.5 bg-white flex items-center justify-between gap-3 text-xs hover:bg-gray-50/50 transition-colors">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-gray-900 truncate" title={svcName}>
+                            {svcName}
+                          </div>
+                          <div className="text-[10px] text-gray-400 mt-0.5">
+                            Текущий зал: <span className={`font-semibold ${meta.badgeText}`}>{hall}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <select
+                            value={hall}
+                            onChange={(e) => handleAssignServiceToHall(svcName, e.target.value as HallName)}
+                            className="text-xs font-semibold bg-gray-50 border border-gray-250 rounded-xl px-2.5 py-1.5 text-gray-800 outline-none cursor-pointer focus:ring-2 focus:ring-indigo-300"
+                          >
+                            {HALL_NAMES.filter(h => h !== 'Прочие услуги').map((hName) => (
+                              <option key={hName} value={hName}>
+                                {hName}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            onClick={() => handleResetServiceHall(svcName)}
+                            className="p-1.5 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Сбросить это назначение"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-gray-50 border-t border-gray-150 flex items-center justify-between">
+              {Object.keys(serviceHallOverrides).length > 0 ? (
+                <button
+                  onClick={handleClearAllHallOverrides}
+                  className="px-3.5 py-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Сбросить все назначения
+                </button>
+              ) : <div />}
+              <button
+                onClick={() => setShowHallOverridesModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-sm"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </main>
     </div>
   );
