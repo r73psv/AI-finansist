@@ -1,12 +1,9 @@
 import { normalizeString } from './processingEngine';
 import { RawRecord } from './types';
+import { HALL_NAMES, HallName } from './hallsClassifier';
 
 export type SupplierHallTarget = 
-  | 'Зал ногтевого сервиса'
-  | 'Зал бровей'
-  | 'Зал колористики/парикмахеры'
-  | 'Мужской зал'
-  | 'Зал макияжей и укладок'
+  | HallName
   | 'распределяются между всеми'
   | 'товары';
 
@@ -21,11 +18,11 @@ export const SUPPLIER_HALL_RULES: SupplierItemDefinition[] = [
   // 1. Зал ногтевого сервиса
   { name: 'Материалы для ногтевиков', target: 'Зал ногтевого сервиса' },
   { name: 'ООО "ВЕЛЛНЕС БЬЮТИ" (La Sultane de Saba)', target: 'Зал ногтевого сервиса' },
-  { name: 'Материалы для эпиляции', target: 'Зал ногтевого сервиса' },
+  { name: 'Материалы для эпиляции', target: 'Зал эпиляции' },
 
-  // 2. Зал бровей
+  // 2. Зал бровей и ресниц
   { name: 'Материалы для бровистов', target: 'Зал бровей' },
-  { name: 'Материалы для ресниц', target: 'Зал бровей' },
+  { name: 'Материалы для ресниц', target: 'Зал ресниц' },
 
   // 3. Зал колористики, стрижек, уходов (Зал колористики/парикмахеры)
   { name: 'ИП Щеголькова (Ипатова/Власов) (Constant Delight расходники)', target: 'Зал колористики/парикмахеры' },
@@ -111,12 +108,46 @@ export function classifySupplierHall(supplierName: string): SupplierHallTarget {
     return 'Зал ногтевого сервиса';
   }
 
+  // Зал ресниц
+  if (
+    norm.includes('реснич') ||
+    norm.includes('ресниц') ||
+    norm.includes('ламинирование ресниц') ||
+    norm.includes('наращивание ресниц')
+  ) {
+    return 'Зал ресниц';
+  }
+
+  // Зал эпиляции
+  if (
+    norm.includes('эпиляц') ||
+    norm.includes('шугаринг') ||
+    norm.includes('фитосмол') ||
+    norm.includes('сахарное моделирование')
+  ) {
+    return 'Зал эпиляции';
+  }
+
+  // Зал массажный
+  if (
+    norm.includes('массаж') ||
+    norm.includes('лимфодренаж')
+  ) {
+    return 'Зал массажный';
+  }
+
+  // Фотостудия
+  if (
+    norm.includes('фотостуди') ||
+    norm.includes('фотограф')
+  ) {
+    return 'Фотостудия';
+  }
+
   // Зал бровей
   if (
     norm.includes('бровист') ||
-    norm.includes('бров') ||
-    norm.includes('ресниц') ||
-    norm.includes('ламинирование ресниц')
+    norm.includes('бров')
   ) {
     return 'Зал бровей';
   }

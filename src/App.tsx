@@ -76,6 +76,7 @@ import { HALL_NAMES, HallName, HALL_METADATA } from './hallsClassifier';
 import { FINANCIAL_TEMPLATE } from './financialTemplate';
 import { SUPPLIER_HALL_RULES, SuppliersAllocationBreakdown } from './suppliersClassifier';
 import TestPlayground from './components/TestPlayground';
+import UserGuideModal from './components/UserGuideModal';
 import { downloadDocxReport } from './docxGenerator';
 
 export interface AggregatedArticleConfig {
@@ -361,6 +362,11 @@ export default function App() {
     'Зал ногтевого сервиса': 0,
     'Зал бровей': 0,
     'Мужской зал': 0,
+    'Зал ресниц': 0,
+    'Фотостудия': 0,
+    'Зал эпиляции': 0,
+    'ЗАЛ SPA': 0,
+    'Зал массажный': 0,
     'Прочие услуги': 0
   });
   const [hallMastersSalaries, setHallMastersSalaries] = useState<Record<string, number>>({
@@ -369,6 +375,11 @@ export default function App() {
     'Зал ногтевого сервиса': 0,
     'Зал бровей': 0,
     'Мужской зал': 0,
+    'Зал ресниц': 0,
+    'Фотостудия': 0,
+    'Зал эпиляции': 0,
+    'ЗАЛ SPA': 0,
+    'Зал массажный': 0,
     'Прочие услуги': 0
   });
   const [serviceAdminSalary, setServiceAdminSalary] = useState<number>(0);
@@ -378,6 +389,7 @@ export default function App() {
   const [customAdminSalary, setCustomAdminSalary] = useState<string>('');
   const [serviceHallOverrides, setServiceHallOverrides] = useState<Record<string, HallName>>(() => loadSavedHallOverrides());
   const [showHallOverridesModal, setShowHallOverridesModal] = useState<boolean>(false);
+  const [showUserGuideModal, setShowUserGuideModal] = useState<boolean>(false);
   const servicesFileInputRef = useRef<HTMLInputElement>(null);
 
   // Handlers for assigning services from "Прочие услуги" to a hall with persistence
@@ -1173,6 +1185,17 @@ export default function App() {
               </button>
             )}
 
+            {/* Detailed User Guide Button */}
+            <button
+              type="button"
+              onClick={() => setShowUserGuideModal(true)}
+              className="px-3.5 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-250 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 transition-all rounded-xl cursor-pointer flex items-center gap-1.5 shadow-2xs"
+              title="Открыть подробное руководство пользователя"
+            >
+              <BookOpen className="w-4 h-4 text-indigo-600" />
+              <span className="hidden sm:inline">Руководство</span>
+            </button>
+
             {stagedRecords.length > 0 && !isProcessed && (
               <button
                 onClick={handleRunProgram}
@@ -1621,11 +1644,19 @@ export default function App() {
                       </li>
                     </ul>
 
-                    <div className="mt-8 pt-6 border-t border-gray-100">
+                    <div className="mt-8 pt-6 border-t border-gray-100 space-y-3">
                       <div className="flex items-center gap-2 text-xs text-indigo-600 bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100/30">
                         <AlertCircle className="w-4.5 h-4.5 flex-shrink-0" />
                         <span>Для быстрого ознакомления нажмите <strong>«Загрузить Демо»</strong> в верхнем меню.</span>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowUserGuideModal(true)}
+                        className="w-full py-2.5 px-3 bg-white hover:bg-gray-50 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                      >
+                        <BookOpen className="w-4 h-4 text-indigo-600" />
+                        <span>Открыть подробное руководство пользователя</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3678,7 +3709,7 @@ export default function App() {
 
                 <div className="mt-3 pt-2.5 border-t border-gray-150 flex items-center justify-between">
                   <span className="text-[11px] text-gray-500">
-                    Общие расходы распределяются автоматически между 5 залами салона на основе формулы: <code className="bg-gray-100 px-1 py-0.5 rounded text-indigo-700 font-mono">Общие_расходы × (Выручка_зала / Общая_выручка_салона)</code>
+                    Общие расходы распределяются автоматически между залами салона на основе формулы: <code className="bg-gray-100 px-1 py-0.5 rounded text-indigo-700 font-mono">Общие_расходы × (Выручка_зала / Общая_выручка_салона)</code>
                   </span>
                   <button
                     onClick={() => setShowSuppliersRulesModal(false)}
@@ -3826,8 +3857,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* 5 Halls Area & Master Salary Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3.5">
+          {/* 10 Halls Area & Master Salary Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3.5">
             {HALL_NAMES.filter(h => h !== 'Прочие услуги').map((hName) => {
               const meta = HALL_METADATA[hName] || HALL_METADATA['Прочие услуги'];
               const currentArea = hallAreas[hName] ?? 0;
@@ -4911,6 +4942,12 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* Modal: Detailed User Guide */}
+      <UserGuideModal
+        isOpen={showUserGuideModal}
+        onClose={() => setShowUserGuideModal(false)}
+        onOpenDemo={loadDemoData}
+      />
       </main>
     </div>
   );

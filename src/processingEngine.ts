@@ -2181,7 +2181,7 @@ export function generateServicesReport(
       // By revenue
       hallCostShare = totalRevenue > 0 
         ? (hRev / totalRevenue) 
-        : (1 / 5);
+        : (1 / (HALL_NAMES.length - 1));
     }
 
     const hAdminSal = parseFloat((absAdminSalary * hallCostShare).toFixed(2));
